@@ -4,6 +4,8 @@ import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import type { Env } from '../config/env.js';
 import { accessLog, stdoutSink, type AccessLogSink } from '../observability/access-log.js';
+import { traceHttpRequest } from '../observability/tracing.js';
+import type { Tracer } from '../observability/tracing.js';
 
 /** Media and evidence uploads arrive as raw bodies; everything else is JSON. */
 export const UPLOAD_TYPES = ['image/*', 'video/mp4', 'application/pdf'];
@@ -27,11 +29,12 @@ type HttpEnv = Pick<Env, 'PUBLIC_APP_URL' | 'JSON_BODY_LIMIT' | 'UPLOAD_BODY_LIM
 export function configureHttp(
   app: NestExpressApplication,
   env: HttpEnv,
-  opts: { accessLog?: AccessLogSink } = {},
+  opts: { accessLog?: AccessLogSink; tracer?: Tracer } = {},
 ): void {
   app.setGlobalPrefix('v1');
   // First, so every request is logged, including ones rejected by body limits, CORS or auth (#147).
   app.use(accessLog(opts.accessLog ?? stdoutSink));
+  if (opts.tracer) app.use(traceHttpRequest(opts.tracer));
   app.use(helmet());
   app.enableCors({ origin: [env.PUBLIC_APP_URL], credentials: true });
   // Small JSON limit keeps a flood of large bodies from exhausting memory; uploads keep their own, larger limit.
@@ -48,7 +51,7 @@ export function payloadTooLarge(err: unknown, _req: Request, res: Response, next
     next(err);
     return;
   }
-  res.status(413).json({ error: 'PAYLOAD_TOO_LARGE', message: `Request body exceeds the ${e.limit} byte limit` });
+  res.status(413).json({ error: 'PAYLOAD_TOO_LARGE', message: `Request body exceeds the ${e.limit} byte limit`, requestId: (res.getHeader('X-Request-Id') as string | undefined) });
 }
 
 /** True when `encoding` is listed in Accept-Encoding without `q=0`. */

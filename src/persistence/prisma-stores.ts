@@ -8,11 +8,21 @@ import type { BondRow, CommitmentRow, DisputeRow, PoolRow, PoolState, ReadStore 
 import type { OtpRecord, OtpStore } from '../auth/otp.service.js';
 import type { SessionRecord, SessionStore } from '../auth/token.service.js';
 import type { UsageStore } from '../relayer/allowlist.js';
+import { traceOperation } from '../observability/tracing.js';
+import type { Tracer } from '../observability/tracing.js';
 
 type Db = PrismaClient | Prisma.TransactionClient;
 
-export function createPrisma(connectionString: string, maxConnections?: number): PrismaClient {
-  return new PrismaClient({ adapter: new PrismaPg({ connectionString, ...(maxConnections ? { max: maxConnections } : {}) }) });
+export function createPrisma(connectionString: string, maxConnections?: number, tracer?: Tracer): PrismaClient {
+  const prisma = new PrismaClient({ adapter: new PrismaPg({ connectionString, ...(maxConnections ? { max: maxConnections } : {}) }) });
+  if (!tracer) return prisma;
+  return prisma.$extends({
+    query: {
+      $allOperations({ model, operation, args, query }) {
+        return traceOperation(tracer, 'prisma.query', { 'db.system': 'postgresql', 'db.operation.name': operation, ...(model ? { 'db.collection.name': model } : {}) }, () => query(args));
+      },
+    },
+  });
 }
 
 /** Money is stored as USDC decimals (Decimal(38,7)); the app works in stroops (bigint). */
