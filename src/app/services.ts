@@ -18,6 +18,7 @@ import { PiiCipher } from '../common/pii.js';
 import { createVerificationProvider, type VerificationProvider } from '../verification/provider.js';
 import { ResilientSmsSender } from '../notifications/dispatcher.js';
 import { Attestor } from '../verification/attestor.js';
+import type { Tracer } from '../observability/tracing.js';
 
 export const SERVICES = Symbol('SERVICES');
 
@@ -81,13 +82,14 @@ export interface BuildOverrides {
   otpRandom?: () => number;
   store?: ObjectStore;
   kyc?: VerificationProvider;
+  tracer?: Tracer;
 }
 
 export function buildServices(env: Env, prisma: PrismaClient, deployments: Deployments, o: BuildOverrides = {}): Services {
   const now = o.now ?? (() => new Date());
   const sponsor = o.chain ? undefined : Keypair.fromSecret(resolveSecret(env.SPONSOR_SECRET_REF, env.NODE_ENV));
   const chain =
-    o.chain ?? new ChainService({ rpcUrl: env.RPC_URL, horizonUrl: env.HORIZON_URL, passphrase: env.NETWORK_PASSPHRASE, sponsor: sponsor!, deployments });
+    o.chain ?? new ChainService({ rpcUrl: env.RPC_URL, horizonUrl: env.HORIZON_URL, passphrase: env.NETWORK_PASSPHRASE, sponsor: sponsor!, deployments, tracer: o.tracer });
   const attestor = o.attestor ?? Keypair.fromSecret(resolveSecret(env.ATTESTOR_SECRET_REF, env.NODE_ENV));
   const offMainnet = env.NODE_ENV !== 'production' && env.STELLAR_NETWORK !== 'mainnet';
   const fxNames = env.FX_SOURCES.split(',').map((x) => x.trim()).filter(Boolean);

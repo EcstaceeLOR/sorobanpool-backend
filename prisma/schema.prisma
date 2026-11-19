@@ -199,6 +199,9 @@ model Pool {
   lastEventLedger  Int      @default(0)
 
   @@index([state, fillDeadline])
+  @@index([endedAt, state])
+  @@index([deliveredAt, state])
+  @@index([escrowBalance])
 }
 
 model Commitment {
@@ -315,6 +318,22 @@ model AuditLog {
   target  String
   data    Json
   at      DateTime @default(now())
+}
+
+model PendingAdminAction {
+  id         String   @id @default(cuid())
+  action     String
+  target     String
+  actorId    String
+  payload    Json
+  status     String   @default("PENDING")
+  approvedBy String?
+  createdAt  DateTime @default(now())
+  expiresAt  DateTime
+  resolvedAt DateTime?
+
+  @@index([status, expiresAt])
+  @@index([target, action, status])
 }
 
 model IdempotencyKey {

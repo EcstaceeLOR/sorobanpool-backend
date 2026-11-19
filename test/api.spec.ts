@@ -21,18 +21,34 @@ const offerBody = () => ({
   moq: 100, maxUnits: 500, maxPerMember: 250, leadTimeHours: 72, deliveryAreas: [{ state: 'FCT', lga: 'Abuja Municipal' }], validUntil: new Date(Date.now() + 7 * 86400_000).toISOString(),
 });
 
-async function approvedSupplier() {
-  const s = await h.login(newPhone());
+async function secondAdmin() {
+  const admin = await h.login(newPhone());
+  await h.db.prisma.userRole.upsert({
+    where: { userId_role: { userId: admin.userId, role: 'ADMIN' } },
+    create: { userId: admin.userId, role: 'ADMIN' },
+    update: {},
+  });
+  return admin;
+}
+
+async function pendingSupplierApproval() {
+  const supplier = await h.login(newPhone());
   const kp = Keypair.random();
-  await h.bindWallet(s.token, kp);
-  await h.http().post('/v1/suppliers/apply').set(auth(s.token)).send({
+  await h.bindWallet(supplier.token, kp);
+  await h.http().post('/v1/suppliers/apply').set(auth(supplier.token)).send({
     businessName: 'Tunde Foods Ltd', cacNumber: 'RC1234567', address: '12 Market Rd', state: 'FCT', lga: 'Abuja Municipal', categories: ['rice'], deliveryAreas: [{ state: 'FCT' }],
   }).expect(200);
   const admin = await h.login(PHONE_ADMIN);
-  await h.http().post(`/v1/admin/suppliers/${s.userId}/decision`).set(auth(admin.token)).send({ approve: true }).expect(200);
-  const fresh = await h.http().post('/v1/auth/otp/request').send({ phone: (await h.db.prisma.user.findUniqueOrThrow({ where: { id: s.userId } })).phone });
+  const response = await h.http().post(`/v1/admin/suppliers/${supplier.userId}/decision`).set(auth(admin.token)).send({ approve: true }).expect(200);
+  return { supplier, kp, admin, actionId: response.body.actionId as string };
+}
+
+async function approvedSupplier() {
+  const application = await pendingSupplierApproval();
+  await h.http().post(`/v1/admin/actions/${application.actionId}/approve`).set(auth((await secondAdmin()).token)).expect(200);
+  const fresh = await h.http().post('/v1/auth/otp/request').send({ phone: (await h.db.prisma.user.findUniqueOrThrow({ where: { id: application.supplier.userId } })).phone });
   const login = await h.http().post('/v1/auth/otp/verify').send({ phone: fresh.body.phone, code: fresh.body.devCode });
-  return { ...s, kp, token: login.body.accessToken as string, adminToken: admin.token };
+  return { ...application.supplier, kp: application.kp, token: login.body.accessToken as string, adminToken: application.admin.token };
 }
 
 describe('auth', () => {
@@ -99,6 +115,35 @@ describe('suppliers and catalog', () => {
     const listed = await h.http().get('/v1/offers?category=rice&state=FCT').expect(200);
     expect(listed.body.some((o: { id: string }) => o.id === created.body.id)).toBe(true);
     expect((await h.http().get('/v1/offers?category=fabric')).body).toEqual([]);
+  });
+
+  it('requires a different admin to approve supplier approval and records both decisions', async () => {
+    const pending = await pendingSupplierApproval();
+    await h.http().post(`/v1/admin/actions/${pending.actionId}/approve`).set(auth(pending.admin.token)).expect(403);
+    expect((await h.db.prisma.pendingAdminAction.findUniqueOrThrow({ where: { id: pending.actionId } })).status).toBe('PENDING');
+
+    const reviewer = await secondAdmin();
+    await h.http().post(`/v1/admin/actions/${pending.actionId}/approve`).set(auth(reviewer.token)).expect(200);
+    expect((await h.db.prisma.supplierProfile.findUniqueOrThrow({ where: { userId: pending.supplier.userId } })).kybStatus).toBe('APPROVED');
+    expect(await h.db.prisma.auditLog.count({ where: { target: pending.actionId } })).toBeGreaterThanOrEqual(1);
+  });
+
+  it('expires pending actions and requires a second admin for suspensions', async () => {
+    const expired = await pendingSupplierApproval();
+    await h.db.prisma.pendingAdminAction.update({ where: { id: expired.actionId }, data: { expiresAt: new Date(Date.now() - 1_000) } });
+    await h.http().post(`/v1/admin/actions/${expired.actionId}/approve`).set(auth((await secondAdmin()).token)).expect(410);
+    expect((await h.db.prisma.pendingAdminAction.findUniqueOrThrow({ where: { id: expired.actionId } })).status).toBe('EXPIRED');
+
+    const admin = await h.login(PHONE_ADMIN);
+    const target = await h.login(newPhone());
+    await h.bindWallet(target.token, Keypair.random());
+    const requested = await h.http().post(`/v1/admin/users/${target.userId}/suspend`).set(auth(admin.token)).send({ reason: 'review required' }).expect(200);
+    expect(requested.body.status).toBe('PENDING_APPROVAL');
+    expect((await h.db.prisma.user.findUniqueOrThrow({ where: { id: target.userId } })).status).toBe('ACTIVE');
+    const response = await h.http().post(`/v1/admin/actions/${requested.body.actionId}/approve`).set(auth((await secondAdmin()).token)).expect(200);
+    expect(response.body.status).toBe('SUSPENDED');
+    expect((await h.db.prisma.user.findUniqueOrThrow({ where: { id: target.userId } })).status).toBe('SUSPENDED');
+    expect(h.chain.calls.at(-1)).toMatchObject({ contract: 'registry', fn: 'suspend' });
   });
 
   it('refuses unverified suppliers, invalid offers and divergent FX', async () => {
@@ -430,11 +475,39 @@ describe('reports: supplier statement and admin risk overview', () => {
     expect(BigInt(o.body.gmv)).toBeGreaterThanOrEqual(1_000_000_000n); // the settled pool above: 100 units x 1 USDC
     expect(o.body.poolsByState.Settled).toBeGreaterThanOrEqual(1);
     expect(Array.isArray(o.body.flags)).toBe(true);
-    for (const path of ['/v1/admin/disputes', '/v1/admin/offers', '/v1/admin/pools?state=Settled', '/v1/admin/users?q=%2B234']) {
+    for (const path of ['/v1/admin/disputes', '/v1/admin/offers', '/v1/admin/pools?state=Settled', '/v1/admin/users?q=%2B234', '/v1/admin/actions']) {
       expect((await h.http().get(path).set(auth(admin.token)).expect(200)).body).toBeInstanceOf(Array);
     }
     const trader = await h.login(newPhone());
-    for (const path of ['/v1/admin/risk/overview', '/v1/admin/disputes', '/v1/admin/users']) await h.http().get(path).set(auth(trader.token)).expect(403);
+    for (const path of ['/v1/admin/risk/overview', '/v1/admin/dashboard', '/v1/admin/disputes', '/v1/admin/users']) await h.http().get(path).set(auth(trader.token)).expect(403);
+  });
+
+  it('returns indexed dashboard counters for a configurable window and caches results for 60 seconds', async () => {
+    const supplier = await approvedSupplier();
+    const me = await h.http().get('/v1/me').set(auth(supplier.token)).expect(200);
+    const offer = await h.http().post('/v1/offers').set(auth(supplier.token)).send(offerBody()).expect(201);
+    const poolId = await settledPoolFor(me.body.walletAddress, offer.body.id);
+    const now = new Date();
+    await h.db.prisma.pool.update({ where: { id: poolId }, data: { deliveredAt: now, endedAt: now, escrowBalance: '12.5' } });
+    const failedId = ++nextSettledId;
+    const openId = ++nextSettledId;
+    const base = {
+      offerId: offer.body.id, organizerAddress: Keypair.random().publicKey(), supplierAddress: me.body.walletAddress,
+      hubAddress: '', hubContact: '', pickupWindow: {}, fillDeadline: now,
+    };
+    await h.db.prisma.pool.create({ data: { ...base, id: failedId, hubHash: failedId.toString(16), shareSlug: `dash-failed-${failedId}`, state: 'Failed', endedAt: now } });
+    await h.db.prisma.pool.create({ data: { ...base, id: openId, hubHash: openId.toString(16), shareSlug: `dash-open-${openId}`, state: 'Open', escrowBalance: '2' } });
+    await h.db.prisma.dispute.create({
+      data: { id: openId + 1n, poolId, openerAddress: Keypair.random().publicKey(), reason: 'quality', claimedUnits: 1, claimedAmount: '1', state: 'OPEN', openedAt: now, slaDueAt: new Date(now.getTime() + 86_400_000) },
+    });
+
+    const admin = await h.login(PHONE_ADMIN);
+    const dashboard = await h.http().get('/v1/admin/dashboard?windowDays=7').set(auth(admin.token)).expect(200);
+    expect(dashboard.body).toMatchObject({ windowDays: 7, gmv: '1000000000', escrowHeld: '145000000', failureRate: 0.5, disputeRate: 1 });
+    expect(dashboard.body.openPools).toBeGreaterThanOrEqual(1);
+    await h.db.prisma.pool.update({ where: { id: poolId }, data: { finalUnitPrice: '99' } });
+    expect((await h.http().get('/v1/admin/dashboard?windowDays=7').set(auth(admin.token)).expect(200)).body.gmv).toBe('1000000000');
+    await h.http().get('/v1/admin/dashboard?windowDays=0').set(auth(admin.token)).expect(400);
   });
 });
 

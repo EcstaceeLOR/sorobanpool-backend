@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
+import { withRequestContext } from './request-context.js';
 
 /**
  * Structured access logs (#147): one JSON line per request with method, route template, status, duration, user id
@@ -69,6 +70,6 @@ export function accessLog(sink: AccessLogSink) {
         query: redact(req.query),
       }));
     });
-    next();
+    withRequestContext(requestId, next);
   };
 }

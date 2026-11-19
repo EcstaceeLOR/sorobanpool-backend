@@ -6,6 +6,9 @@ import { walletAddress, walletSalt } from '../wallets/smart-wallet.js';
 import { type ContractName, contractId, type Deployments } from './deployments.js';
 import { credentialAddress, inspectUserTx } from './inspect.js';
 import { extendTtl, instanceAndCodeKeys, needsExtension, ttlStatus } from './ttl.js';
+import { instrumentRpcServer } from '../observability/tracing.js';
+import { requestHeaders } from '../observability/request-context.js';
+import type { Tracer } from '../observability/tracing.js';
 
 export const MAX_FEE_STROOPS = 50_000_000; // 5 XLM: a hard ceiling per sponsored transaction
 const AUTH_VALID_LEDGERS = 60; // ~5 minutes
@@ -37,6 +40,7 @@ export interface ChainOptions {
   passphrase: string;
   sponsor: Keypair;
   deployments: Deployments;
+  tracer?: Tracer;
 }
 
 /**
@@ -49,7 +53,7 @@ export class ChainService {
   private readonly lock = new Mutex();
 
   constructor(private readonly o: ChainOptions) {
-    this.server = new rpc.Server(o.rpcUrl, { allowHttp: o.rpcUrl.startsWith('http://') });
+    this.server = instrumentRpcServer(new rpc.Server(o.rpcUrl, { allowHttp: o.rpcUrl.startsWith('http://') }), o.tracer);
   }
 
   get sponsorAddress(): string {
@@ -61,7 +65,7 @@ export class ChainService {
   /** Native (XLM) balance of the sponsor in stroops, read from Horizon; the sponsor pays every user's fee. */
   async sponsorBalance(): Promise<bigint> {
     if (!this.o.horizonUrl) throw new Error('horizonUrl not configured');
-    const res = await fetch(`${this.o.horizonUrl.replace(/\/$/, '')}/accounts/${this.sponsorAddress}`);
+    const res = await fetch(`${this.o.horizonUrl.replace(/\/$/, '')}/accounts/${this.sponsorAddress}`, { headers: requestHeaders() });
     if (!res.ok) throw new Error(`horizon ${res.status}`);
     const body = (await res.json()) as { balances: { asset_type: string; balance: string }[] };
     const native = body.balances.find((b) => b.asset_type === 'native')?.balance ?? '0';

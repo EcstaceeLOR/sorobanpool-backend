@@ -1,6 +1,6 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, Inject, NotFoundException, Param, Post, Query, Res } from '@nestjs/common';
-import type { Response } from 'express';
+import { BadRequestException, Body, ConflictException, Controller, ForbiddenException, Get, GoneException, HttpCode, Inject, NotFoundException, Param, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
+import { Prisma } from '../generated/prisma/client.js';
 import { A, type Role } from '../chain/args.js';
 import { sha256Hex } from '../common/canonical-json.js';
 import { mask } from '../common/pii.js';
@@ -71,14 +71,79 @@ export class AdminController {
     if (!profile) throw new NotFoundException('supplier application not found');
     if (!b.approve) {
       await this.s.prisma.supplierProfile.update({ where: { userId }, data: { kybStatus: 'REJECTED' } });
-      await this.audit(admin.id, 'supplier.reject', userId, { note: b.note });
+      await this.audit(admin.id, 'supplier.reject', userId, b.note === undefined ? {} : { note: b.note });
       return { kybStatus: 'REJECTED' };
     }
-    const tx = await this.attest(userId, 'Supplier', 1);
-    await this.s.prisma.supplierProfile.update({ where: { userId }, data: { kybStatus: 'APPROVED' } });
-    await this.s.prisma.userRole.upsert({ where: { userId_role: { userId, role: 'SUPPLIER' } }, create: { userId, role: 'SUPPLIER', level: 1, verHash: tx.verHash }, update: { level: 1, verHash: tx.verHash } });
-    await this.audit(admin.id, 'supplier.approve', userId, { note: b.note, tx: tx.hash });
-    return { kybStatus: 'APPROVED', txHash: tx.hash };
+    return this.requestApproval(admin.id, 'supplier.approve', userId, b.note === undefined ? {} : { note: b.note });
+  }
+
+  @Roles('ADMIN') @Get('admin/actions')
+  async pendingActions() {
+    const rows = await this.s.prisma.pendingAdminAction.findMany({
+      where: { status: 'PENDING', expiresAt: { gt: this.s.now() } },
+      orderBy: { createdAt: 'asc' },
+      take: 100,
+      select: { id: true, action: true, target: true, actorId: true, createdAt: true, expiresAt: true },
+    });
+    return rows;
+  }
+
+  @Roles('ADMIN') @Post('admin/actions/:id/approve') @HttpCode(200)
+  async approveAction(@CurrentUser() admin: AuthedUser, @Param('id') id: string) {
+    const pending = await this.s.prisma.pendingAdminAction.findUnique({ where: { id } });
+    if (!pending) throw new NotFoundException('pending admin action not found');
+    if (pending.actorId === admin.id) throw new ForbiddenException('another admin must approve this action');
+    const now = this.s.now();
+    if (pending.status === 'PENDING' && pending.expiresAt <= now) {
+      await this.s.prisma.pendingAdminAction.updateMany({ where: { id, status: 'PENDING' }, data: { status: 'EXPIRED' } });
+      await this.audit(admin.id, 'admin.action.expired', id, { requestedBy: pending.actorId, action: pending.action, target: pending.target });
+      throw new GoneException('pending admin action has expired');
+    }
+    const claimed = await this.s.prisma.pendingAdminAction.updateMany({
+      where: { id, actorId: { not: admin.id }, status: 'PENDING', expiresAt: { gt: now } },
+      data: { status: 'PROCESSING', approvedBy: admin.id },
+    });
+    if (claimed.count !== 1) throw new ConflictException('pending admin action is expired or already being processed');
+
+    try {
+      let result: Record<string, unknown>;
+      let action: string;
+      let auditData: Prisma.InputJsonObject;
+      if (pending.action === 'supplier.approve') {
+        const { note } = parse(z.object({ note: z.string().max(500).optional() }), pending.payload);
+        const profile = await this.s.prisma.supplierProfile.findUnique({ where: { userId: pending.target } });
+        if (!profile) throw new NotFoundException('supplier application not found');
+        const tx = await this.attest(pending.target, 'Supplier', 1);
+        action = 'supplier.approve';
+        auditData = { requestedBy: pending.actorId, ...(note === undefined ? {} : { note }), tx: tx.hash };
+        result = { kybStatus: 'APPROVED', txHash: tx.hash };
+        await this.s.prisma.$transaction(async (db) => {
+          await db.supplierProfile.update({ where: { userId: pending.target }, data: { kybStatus: 'APPROVED' } });
+          await db.userRole.upsert({ where: { userId_role: { userId: pending.target, role: 'SUPPLIER' } }, create: { userId: pending.target, role: 'SUPPLIER', level: 1, verHash: tx.verHash }, update: { level: 1, verHash: tx.verHash } });
+          await db.pendingAdminAction.update({ where: { id }, data: { status: 'APPROVED', resolvedAt: now } });
+          await db.auditLog.create({ data: { actorId: admin.id, action, target: pending.target, data: auditData } });
+          await db.auditLog.create({ data: { actorId: admin.id, action: 'admin.action.approve', target: id, data: { requestedBy: pending.actorId, action: pending.action, target: pending.target } } });
+        });
+      } else if (pending.action === 'user.suspend') {
+        const { reason } = parse(z.object({ reason: z.string().trim().min(1).max(500) }), pending.payload);
+        const prepared = await this.prepareSuspension(admin, pending.target);
+        action = 'user.suspend';
+        auditData = { requestedBy: pending.actorId, reason };
+        result = { ...prepared, status: 'SUSPENDED' };
+        await this.s.prisma.$transaction(async (db) => {
+          await db.user.update({ where: { id: pending.target }, data: { status: 'SUSPENDED' } });
+          await db.pendingAdminAction.update({ where: { id }, data: { status: 'APPROVED', resolvedAt: now } });
+          await db.auditLog.create({ data: { actorId: admin.id, action, target: pending.target, data: auditData } });
+          await db.auditLog.create({ data: { actorId: admin.id, action: 'admin.action.approve', target: id, data: { requestedBy: pending.actorId, action: pending.action, target: pending.target } } });
+        });
+      } else {
+        throw new ConflictException('unsupported pending admin action');
+      }
+      return result;
+    } catch (error) {
+      await this.s.prisma.pendingAdminAction.updateMany({ where: { id, status: 'PROCESSING' }, data: { status: 'PENDING', approvedBy: null } });
+      throw error;
+    }
   }
 
   /** Writes a verification (KYC) level for a trader or organizer. */
@@ -104,13 +169,16 @@ export class AdminController {
   @Roles('ADMIN') @Post('admin/users/:id/suspend') @HttpCode(200)
   async suspend(@CurrentUser() admin: AuthedUser, @Param('id') id: string, @Body() body: unknown) {
     const { reason } = parse(z.object({ reason: z.string().trim().min(1).max(500) }), body);
-    return this.setSuspension(admin, id, reason, true);
+    const user = await this.s.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('user not found');
+    if (!user.walletAddress) throw new BadRequestException({ error: 'NO_WALLET', message: 'The user has not bound a wallet' });
+    return this.requestApproval(admin.id, 'user.suspend', id, { reason });
   }
 
   @Roles('ADMIN') @Post('admin/users/:id/unsuspend') @HttpCode(200)
   async unsuspend(@CurrentUser() admin: AuthedUser, @Param('id') id: string, @Body() body: unknown) {
     const { reason } = parse(z.object({ reason: z.string().trim().min(1).max(500) }), body);
-    return this.setSuspension(admin, id, reason, false);
+    return this.setSuspension(admin, id, reason);
   }
 
   @Roles('ADMIN') @Post('admin/offers/:id/takedown') @HttpCode(200)
@@ -132,20 +200,34 @@ export class AdminController {
     return this.s.attestations.attest(userId, user.walletAddress, role, level, 'admin-review', 'admin');
   }
 
-  private async setSuspension(admin: AuthedUser, userId: string, reason: string, suspended: boolean) {
+  private async setSuspension(admin: AuthedUser, userId: string, reason: string) {
     const user = await this.s.prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new NotFoundException('user not found');
     if (!user.walletAddress) throw new BadRequestException({ error: 'NO_WALLET', message: 'The user has not bound a wallet' });
-    const action = suspended ? 'suspend' : 'unsuspend';
-    const prepared = await prepareAction(
-      this.s,
-      'registry',
-      action,
-      suspended ? A.suspend(await walletOf(this.s, admin.id), user.walletAddress) : A.unsuspend(await walletOf(this.s, admin.id), user.walletAddress),
-    );
-    const status = suspended ? 'SUSPENDED' : 'ACTIVE';
+    const action = 'unsuspend';
+    const prepared = await prepareAction(this.s, 'registry', action, A.unsuspend(await walletOf(this.s, admin.id), user.walletAddress));
+    const status = 'ACTIVE';
     await this.s.prisma.user.update({ where: { id: userId }, data: { status } });
     await this.audit(admin.id, `user.${action}`, userId, { reason });
     return { ...prepared, status };
+  }
+
+  private async prepareSuspension(admin: AuthedUser, userId: string) {
+    const user = await this.s.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('user not found');
+    if (!user.walletAddress) throw new BadRequestException({ error: 'NO_WALLET', message: 'The user has not bound a wallet' });
+    return prepareAction(this.s, 'registry', 'suspend', A.suspend(await walletOf(this.s, admin.id), user.walletAddress));
+  }
+
+  private async requestApproval(actorId: string, action: string, target: string, payload: Prisma.InputJsonObject) {
+    const expiresAt = new Date(this.s.now().getTime() + this.s.env.ADMIN_ACTION_EXPIRY_MINUTES * 60_000);
+    const pending = await this.s.prisma.$transaction(async (db) => {
+      const row = await db.pendingAdminAction.create({
+        data: { action, target, actorId, payload, expiresAt },
+      });
+      await db.auditLog.create({ data: { actorId, action: 'admin.action.requested', target, data: { action, actionId: row.id, expiresAt: expiresAt.toISOString() } } });
+      return row;
+    });
+    return { status: 'PENDING_APPROVAL', actionId: pending.id, expiresAt };
   }
 }

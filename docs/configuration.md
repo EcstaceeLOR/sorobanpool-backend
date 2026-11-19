@@ -44,7 +44,7 @@ variable must be set for every role even if that role does not read it.
 | `WEBAUTHN_ORIGIN` | **required** | no | api | Origin passkey assertions must come from. |
 | `PUBLIC_APP_URL` | **required** | no | api | Frontend URL; the only allowed CORS origin. |
 | `SENTRY_DSN` | `""` | **secret** | all | Sentry DSN; empty disables error reporting. |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | `""` | no | reserved | OpenTelemetry collector endpoint (tracing not wired yet). |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `""` | no | all | OTLP HTTP traces endpoint; empty disables OpenTelemetry tracing. |
 | `MAINNET_ENABLED` | `false` | no | all | Explicit opt-in required for STELLAR_NETWORK=mainnet (testnet only until the audit). |
 | `OTP_DEV_ECHO` | `false` | no | api | Dev only: return the OTP in the API response. Refused in production. |
 | `BOOTSTRAP_ADMIN_PHONES` | `""` | no | api | Dev only: comma-separated phones that get ADMIN on first login. Refused in production. |
@@ -64,3 +64,4 @@ variable must be set for every role even if that role does not read it.
 | `UPLOAD_BODY_LIMIT` | `16mb` | no | api | Max raw upload body for media and evidence (image/*, video/mp4, application/pdf); larger bodies get a 413. |
 | `COMPRESSION_THRESHOLD_BYTES` | `1024` | no | api | JSON GET responses at or above this size are compressed (brotli, else gzip). |
 | `IDEMPOTENCY_RETENTION_DAYS` | `7` | no | worker | The maintenance job deletes idempotency keys older than this many days. |
+| `ADMIN_ACTION_EXPIRY_MINUTES` | `30` | no | api | Minutes before a pending sensitive admin action expires (1–10,080; default 30). |

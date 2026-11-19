@@ -61,6 +61,12 @@ describe('access log middleware', () => {
     expect(JSON.parse(lines[0] as string).requestId).toBe(r.headers['x-request-id']);
   });
 
+  it('includes the request id in error bodies as well as the response header', async () => {
+    const r = await h.http().get('/v1/me').set('X-Request-Id', 'error-req-1').expect(401);
+    expect(r.headers['x-request-id']).toBe('error-req-1');
+    expect(r.body.requestId).toBe('error-req-1');
+  });
+
   it('never logs planted secrets from the query or the body', async () => {
     await h.http().get('/v1/health').query({ phone: PHONE, bvn: BVN, nin: NIN, cac: CAC, accountNumber: ACCOUNT, token: TOKEN, q: PHONE });
     await h.http().post('/v1/auth/otp/request').send({ phone: PHONE, bvn: BVN, nin: NIN, accountNumber: ACCOUNT, token: TOKEN });

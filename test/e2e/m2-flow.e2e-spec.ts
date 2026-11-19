@@ -49,7 +49,7 @@ describe.skipIf(!enabled)('M2 acceptance flow on testnet', () => {
       DATABASE_URL: 'postgresql://x', REDIS_URL: 'redis://x', S3_ENDPOINT: 'http://x', S3_BUCKET_PUBLIC: 'p', S3_BUCKET_EVIDENCE: 'e', S3_ACCESS_KEY_REF: 'a', S3_SECRET_KEY_REF: 'b',
       JWT_SECRET: 'j'.repeat(32), JWT_REFRESH_SECRET: 'r'.repeat(32), OTP_HMAC_SECRET: 'o'.repeat(32), ENCRYPTION_KEY_ID: 'literal:BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc=', RPC_URL: RPC, HORIZON_URL: 'https://horizon-testnet.stellar.org',
       NETWORK_PASSPHRASE: PASSPHRASE, SPONSOR_SECRET_REF: 'env:SPONSOR_SECRET', ATTESTOR_SECRET_REF: 'env:SPONSOR_SECRET', WEBAUTHN_RP_ID: 'localhost',
-      WEBAUTHN_ORIGIN: 'http://localhost:3001', PUBLIC_APP_URL: 'http://localhost:3001', OTP_DEV_ECHO: 'true', BOOTSTRAP_ADMIN_PHONES: '+2348000000001', FX_STATIC: '1500,1505', STELLAR_NETWORK: 'testnet',
+      WEBAUTHN_ORIGIN: 'http://localhost:3001', PUBLIC_APP_URL: 'http://localhost:3001', OTP_DEV_ECHO: 'true', BOOTSTRAP_ADMIN_PHONES: '+2348000000001,+2348000000003', FX_STATIC: '1500,1505', STELLAR_NETWORK: 'testnet',
     } as NodeJS.ProcessEnv);
     s = buildServices(env, db.prisma, deployments, { store: new LocalObjectStore(mkdtempSync(join(tmpdir(), 'sp-e2e-'))) });
     chain = s.chain as ChainService;
@@ -145,7 +145,9 @@ describe.skipIf(!enabled)('M2 acceptance flow on testnet', () => {
     await http().post('/v1/suppliers/apply').set(auth(supplier.token)).send({
       businessName: 'Tunde Foods Ltd', cacNumber: 'RC1234567', address: '12 Market Rd', state: 'FCT', lga: 'Abuja Municipal', categories: ['rice'], deliveryAreas: [{ state: 'FCT' }],
     }).expect(200);
-    await http().post(`/v1/admin/suppliers/${supplier.userId}/decision`).set(auth(admin.token)).send({ approve: true }).expect(200);
+    const requested = await http().post(`/v1/admin/suppliers/${supplier.userId}/decision`).set(auth(admin.token)).send({ approve: true }).expect(200);
+    const reviewer = await login('+2348000000003');
+    await http().post(`/v1/admin/actions/${requested.body.actionId}/approve`).set(auth(reviewer.token)).expect(200);
     await http().post(`/v1/admin/users/${organizer.userId}/roles`).set(auth(admin.token)).send({ role: 'ORGANIZER' }).expect(200);
     await http().post(`/v1/admin/users/${organizer.userId}/attest`).set(auth(admin.token)).send({ role: 'Organizer', level: 1 }).expect(200);
     for (const t of traders) await http().post(`/v1/admin/users/${t.userId}/attest`).set(auth(admin.token)).send({ role: 'Trader', level: 1 }).expect(200);

@@ -47,7 +47,7 @@ export const ENV_DOCS: Record<keyof typeof envSchema.shape, EnvDoc> = {
   WEBAUTHN_ORIGIN: { usedBy: 'api', sensitivity: 'public', description: 'Origin passkey assertions must come from.' },
   PUBLIC_APP_URL: { usedBy: 'api', sensitivity: 'public', description: 'Frontend URL; the only allowed CORS origin.' },
   SENTRY_DSN: { usedBy: 'all', sensitivity: 'secret', description: 'Sentry DSN; empty disables error reporting.' },
-  OTEL_EXPORTER_OTLP_ENDPOINT: { usedBy: 'reserved', sensitivity: 'public', description: 'OpenTelemetry collector endpoint (tracing not wired yet).' },
+  OTEL_EXPORTER_OTLP_ENDPOINT: { usedBy: 'all', sensitivity: 'public', description: 'OTLP HTTP traces endpoint; empty disables OpenTelemetry tracing.' },
   MAINNET_ENABLED: { usedBy: 'all', sensitivity: 'public', description: 'Explicit opt-in required for STELLAR_NETWORK=mainnet (testnet only until the audit).' },
   OTP_DEV_ECHO: { usedBy: 'api', sensitivity: 'public', description: 'Dev only: return the OTP in the API response. Refused in production.' },
   BOOTSTRAP_ADMIN_PHONES: { usedBy: 'api', sensitivity: 'public', description: 'Dev only: comma-separated phones that get ADMIN on first login. Refused in production.' },
@@ -67,6 +67,7 @@ export const ENV_DOCS: Record<keyof typeof envSchema.shape, EnvDoc> = {
   UPLOAD_BODY_LIMIT: { usedBy: 'api', sensitivity: 'public', description: 'Max raw upload body for media and evidence (image/*, video/mp4, application/pdf); larger bodies get a 413.' },
   COMPRESSION_THRESHOLD_BYTES: { usedBy: 'api', sensitivity: 'public', description: 'JSON GET responses at or above this size are compressed (brotli, else gzip).' },
   IDEMPOTENCY_RETENTION_DAYS: { usedBy: 'worker', sensitivity: 'public', description: 'The maintenance job deletes idempotency keys older than this many days.' },
+  ADMIN_ACTION_EXPIRY_MINUTES: { usedBy: 'api', sensitivity: 'public', description: 'Minutes before a pending sensitive admin action expires (1–10,080; default 30).' },
 };
 
 const SENSITIVITY_LABEL: Record<Sensitivity, string> = {

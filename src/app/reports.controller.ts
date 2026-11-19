@@ -13,7 +13,61 @@ const str = (b: bigint): string => b.toString();
 
 @Controller()
 export class ReportsController {
+  private readonly dashboardCache = new Map<number, { expiresAt: number; value: Record<string, unknown> }>();
+
   constructor(@Inject(SERVICES) private readonly s: Services) {}
+
+  /** Current operational counters and rates for the selected rolling window; cached per window for one minute. */
+  @Roles('ADMIN') @Get('admin/dashboard')
+  async dashboard(@Query('windowDays') windowDays?: string) {
+    const { days } = parse(z.object({ days: z.coerce.number().int().min(1).max(365).default(7) }), { days: windowDays });
+    const cached = this.dashboardCache.get(days);
+    if (cached && cached.expiresAt > Date.now()) return cached.value;
+
+    const since = new Date(this.s.now().getTime() - days * 86_400_000);
+    const [gmv, escrow, openPools, failures, disputes] = await Promise.all([
+      this.s.prisma.$queryRaw<{ value: Prisma.Decimal }[]>(Prisma.sql`
+        SELECT COALESCE(SUM("receivedUnits" * "finalUnitPrice"), 0)::numeric AS value
+        FROM "Pool"
+        WHERE "deliveredAt" >= ${since} AND state IN ('Delivered', 'Settled')
+      `),
+      this.s.prisma.$queryRaw<{ value: Prisma.Decimal }[]>(Prisma.sql`
+        SELECT COALESCE(SUM("escrowBalance"), 0)::numeric AS value
+        FROM "Pool" WHERE "escrowBalance" > 0
+      `),
+      this.s.prisma.pool.count({ where: { state: { in: ['Open', 'Filled', 'Accepted', 'Dispatched', 'Delivered'] } } }),
+      this.s.prisma.$queryRaw<{ completed: number; failed: number }[]>(Prisma.sql`
+        SELECT
+          COUNT(*) FILTER (WHERE state IN ('Settled', 'Failed', 'Expired', 'Cancelled'))::int AS completed,
+          COUNT(*) FILTER (WHERE state IN ('Failed', 'Expired', 'Cancelled'))::int AS failed
+        FROM "Pool"
+        WHERE "endedAt" >= ${since} AND state IN ('Settled', 'Failed', 'Expired', 'Cancelled')
+      `),
+      this.s.prisma.$queryRaw<{ delivered: number; disputed: number }[]>(Prisma.sql`
+        SELECT
+          (SELECT COUNT(*)::int FROM "Pool"
+           WHERE "deliveredAt" >= ${since} AND state IN ('Delivered', 'Settled')) AS delivered,
+          (SELECT COUNT(DISTINCT p.id)::int
+           FROM "Dispute" d JOIN "Pool" p ON p.id = d."poolId"
+           WHERE d."openedAt" >= ${since} AND p."deliveredAt" >= ${since}
+             AND p.state IN ('Delivered', 'Settled')) AS disputed
+      `),
+    ]);
+    const completed = failures[0]?.completed ?? 0;
+    const delivered = disputes[0]?.delivered ?? 0;
+    const value = {
+      windowDays: days,
+      since,
+      gmv: toStroops(gmv[0]?.value.toString() ?? '0').toString(),
+      escrowHeld: toStroops(escrow[0]?.value.toString() ?? '0').toString(),
+      openPools,
+      failureRate: completed ? (failures[0]!.failed / completed) : 0,
+      disputeRate: delivered ? ((disputes[0]?.disputed ?? 0) / delivered) : 0,
+      generatedAt: this.s.now().toISOString(),
+    };
+    this.dashboardCache.set(days, { expiresAt: Date.now() + 60_000, value });
+    return value;
+  }
 
   /** GMV, escrow held, failure and dispute rates, supplier ranking and the organizer-supplier collusion signal. */
   @Roles('ADMIN') @Get('admin/risk/overview')
