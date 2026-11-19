@@ -108,9 +108,14 @@ docker compose up -d postgres redis minio
 stellar keys generate sp-dev --network testnet --fund
 export SPONSOR_SECRET=$(stellar keys show sp-dev)   # pays testnet fees; never commit it
 pnpm prisma:migrate:deploy
+pnpm seed                                     # optional: dev users, live offers, pools in every state
 pnpm start:dev
 curl localhost:3000/v1/health                 # {"status":"ok","role":"api"}
 ```
+
+**Everything in containers:** `docker compose up --build` starts Postgres, Redis and MinIO, waits for each to report healthy, then starts the API and a worker (they reach the dependencies by service name, overriding the `localhost` URLs in `.env`). Run the migrations once against the published Postgres port with `pnpm prisma:migrate:deploy`.
+
+**Seed data:** `pnpm seed` builds and loads a verified supplier with two live offers, an organizer, three traders, and one pool each in the Open, Filled, Delivered and Settled states. It is idempotent (fixed ids, upserts), refuses to run with `NODE_ENV=production` or `STELLAR_NETWORK=mainnet`, and writes read-model rows only: nothing is sent on-chain.
 
 This runs against the contracts already on testnet (`deployments/testnet.json`, vendored by `scripts/sync-contract-artifacts.sh`). A fresh indexer starts at the deploy ledger, or inside the RPC retention window, and catches up ([runbook](docs/runbooks/indexer-backfill.md)).
 

@@ -1,18 +1,56 @@
+# Every dependency declares a healthcheck, and the API and worker wait for `service_healthy`, so a cold
+# `docker compose up` works first time instead of racing Postgres, Redis and MinIO (#149).
 services:
   postgres:
     image: postgres:16
     environment: { POSTGRES_USER: sorobanpool, POSTGRES_PASSWORD: sorobanpool, POSTGRES_DB: sorobanpool }
     ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sorobanpool -d sorobanpool"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
   redis:
     image: redis:7
     ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
   minio:
     image: minio/minio
     command: server /data --console-address ":9001"
     ports: ["9000:9000", "9001:9001"]
+    healthcheck:
+      # The MinIO image ships the `mc` client; `mc ready local` succeeds once the server accepts requests.
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
   api:
     build: .
     env_file: .env
-    environment: { ROLE: api }
+    environment: &container-env
+      ROLE: api
+      # .env targets localhost for host-run dev; inside compose the dependencies are reached by service name.
+      DATABASE_URL: postgresql://sorobanpool:sorobanpool@postgres:5432/sorobanpool
+      REDIS_URL: redis://redis:6379
+      S3_ENDPOINT: http://minio:9000
     ports: ["3000:3000"]
-    depends_on: [postgres, redis, minio]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }
+  worker:
+    build: .
+    env_file: .env
+    environment:
+      <<: *container-env
+      ROLE: worker
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      minio: { condition: service_healthy }

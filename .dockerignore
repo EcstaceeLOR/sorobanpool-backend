@@ -5,3 +5,8 @@ dist
 .evidence
 src/generated
 coverage
+.github
+docs
+test
+*.md
+docker-compose.yml
