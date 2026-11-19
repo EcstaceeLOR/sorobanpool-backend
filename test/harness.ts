@@ -2,6 +2,7 @@ import { NestFactory } from '@nestjs/core';
 import type { NestExpressApplication } from '@nestjs/platform-express';
 import { Account, Address, Contract, Keypair, Networks, Operation, StrKey, TransactionBuilder, scValToNative, xdr, type Transaction } from '@stellar/stellar-sdk';
 import { AppModule } from '../src/app/app.module.js';
+import { configureHttp } from '../src/app/http-setup.js';
 import { buildServices, devInbox, type ChainPort, type Services } from '../src/app/services.js';
 import { CONTRACT_NAMES, type ContractName, type Deployments } from '../src/chain/deployments.js';
 import { loadEnv } from '../src/config/env.js';
@@ -94,8 +95,7 @@ export async function startHarness(over: Record<string, string> = {}): Promise<H
   const store = new LocalObjectStore(mkdtempSync(join(tmpdir(), 'sp-evidence-')));
   const s = buildServices(env, db.prisma, deployments, { chain, attestor, store, otpRandom: undefined });
   const app = await NestFactory.create<NestExpressApplication>(AppModule.forRoot(s), { logger: false });
-  app.setGlobalPrefix('v1');
-  app.useBodyParser('raw', { type: ['image/*', 'video/mp4', 'application/pdf'], limit: '16mb' });
+  configureHttp(app, env);
   await app.init();
   const http = () => request(app.getHttpServer());
   let n = 0;

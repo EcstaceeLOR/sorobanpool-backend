@@ -56,6 +56,14 @@ export const envSchema = z.object({
   /** registry.attest calls allowed per UTC day (brief 7.8 attestor daily cap); alerts at 80%. */
   ATTESTOR_DAILY_CAP: z.coerce.number().int().positive().default(500),
   INDEXER_START_LEDGER: z.coerce.number().int().positive().optional(),
+  /** Max JSON request body (body-parser syntax, e.g. "100kb"); larger bodies get a 413 (#171). */
+  JSON_BODY_LIMIT: z.string().min(1).default('100kb'),
+  /** Max raw upload body for media and evidence (image/*, video/mp4, application/pdf) (#171). */
+  UPLOAD_BODY_LIMIT: z.string().min(1).default('16mb'),
+  /** JSON GET responses at or above this size are compressed (brotli, else gzip) (#174). */
+  COMPRESSION_THRESHOLD_BYTES: z.coerce.number().int().nonnegative().default(1024),
+  /** Idempotency keys older than this are deleted by the maintenance job (#173). */
+  IDEMPOTENCY_RETENTION_DAYS: z.coerce.number().positive().default(7),
 });
 
 export type Env = z.infer<typeof envSchema>;

@@ -17,4 +17,8 @@ Every `prepare` returns `{txXdr, authEntries[], validUntilLedger, contract, fn}`
 
 Rate limit: `RATE_LIMIT_PER_MIN` requests per client IP per minute (default 300), then `429 {error:"RATE_LIMITED", retryAfterSecs}`; health is exempt. Behind a proxy set Express `trust proxy` so the real client IP is used.
 
+Body limits: JSON bodies over `JSON_BODY_LIMIT` (default `100kb`) and raw uploads (`image/*`, `video/mp4`, `application/pdf`) over `UPLOAD_BODY_LIMIT` (default `16mb`) are refused with `413 {error:"PAYLOAD_TOO_LARGE"}` before any route runs.
+
+Compression and caching: JSON `GET` responses of at least `COMPRESSION_THRESHOLD_BYTES` (default 1024) are sent with brotli when the client accepts it, otherwise gzip, with `Vary: Accept-Encoding`. Public routes set `Cache-Control` by class (`src/app/http-setup.ts`): `GET /offers` and `GET /offers/:id` use `public, max-age=60, stale-while-revalidate=300`; `GET /p/:slug` (live progress) uses `public, max-age=15, stale-while-revalidate=60`; `GET /pools/:id/sharecard.png` uses `public, max-age=60`, so WhatsApp and CDN previews refresh within a minute of a pool changing. Authenticated routes set no `Cache-Control`.
+
 `docs/openapi.json` (also served at `/v1/openapi.json`) lists every route with method, auth requirement, roles (`x-roles`) and path parameters. It is generated from controller metadata (`pnpm openapi` after changing routes; a test fails if it is stale). It does not describe request or response bodies; this file does.

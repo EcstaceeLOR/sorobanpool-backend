@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, ForbiddenException, Get, HttpCode, Inject, NotFoundException, Param, Patch, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Header, HttpCode, Inject, NotFoundException, Param, Patch, Post, Query } from '@nestjs/common';
 import { z } from 'zod';
 import { type Prisma } from '../generated/prisma/client.js';
 import { offerHash } from '../catalog/offer.js';
@@ -6,6 +6,7 @@ import { validateOffer } from '../catalog/offer-validation.js';
 import { combineQuotes, convertTiers, FxDivergenceError } from '../fx/fx.js';
 import type { Tier } from '../pools/pricing.js';
 import { type AuthedUser, CurrentUser, parse, Public, Roles } from './http.js';
+import { CACHE_CONTROL } from './http-setup.js';
 import { SERVICES, type Services } from './services.js';
 
 const tierNgn = z.object({ minUnits: z.number().int().positive(), priceNgn: z.string().regex(/^\d+$/, 'whole naira, digits only') });
@@ -125,7 +126,7 @@ export class CatalogController {
     }
   }
 
-  @Public() @Get('offers')
+  @Public() @Get('offers') @Header('Cache-Control', CACHE_CONTROL.catalog)
   async list(@Query() q: Record<string, string | undefined>) {
     const now = this.s.now();
     const where: Prisma.OfferWhereInput = { status: 'LIVE', validUntil: { gt: now } };
@@ -139,7 +140,7 @@ export class CatalogController {
     return rows.filter((r) => inArea(r.deliveryAreas)).map(publicOffer);
   }
 
-  @Public() @Get('offers/:id')
+  @Public() @Get('offers/:id') @Header('Cache-Control', CACHE_CONTROL.catalog)
   async one(@Param('id') id: string) {
     const o = await this.s.prisma.offer.findUnique({ where: { id } });
     if (!o || o.status === 'DRAFT') throw new NotFoundException('offer not found');

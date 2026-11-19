@@ -7,6 +7,28 @@ export async function expireOffers(prisma: Pick<PrismaClient, 'offer'>, now: Dat
   return r.count;
 }
 
+/**
+ * Deletes `IdempotencyKey` rows created before `now - retentionDays` (#173). A key only guards a client retry, so
+ * after the retention window it is dead weight. Deletion runs in batches of `batchSize` so one run never holds a
+ * long lock, and stops after `maxBatches` so a large backlog drains over several runs instead of one.
+ */
+export async function purgeIdempotencyKeys(
+  prisma: Pick<PrismaClient, 'idempotencyKey'>, now: Date, retentionDays: number, batchSize = 500, maxBatches = 20,
+): Promise<number> {
+  const cutoff = new Date(now.getTime() - retentionDays * 86_400_000);
+  let deleted = 0;
+  for (let i = 0; i < maxBatches; i++) {
+    const batch = await prisma.idempotencyKey.findMany({
+      where: { createdAt: { lt: cutoff } }, select: { key: true }, orderBy: { createdAt: 'asc' }, take: batchSize,
+    });
+    if (batch.length === 0) break;
+    const r = await prisma.idempotencyKey.deleteMany({ where: { key: { in: batch.map((k) => k.key) } } });
+    deleted += r.count;
+    if (batch.length < batchSize) break;
+  }
+  return deleted;
+}
+
 export interface SponsorHealth {
   balanceStroops: bigint;
   minStroops: bigint;
