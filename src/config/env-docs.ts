@@ -63,6 +63,10 @@ export const ENV_DOCS: Record<keyof typeof envSchema.shape, EnvDoc> = {
   FX_STATIC: { usedBy: 'all', sensitivity: 'public', description: 'Comma-separated NGN-per-USD rates for the static FX provider (testnet/dev).' },
   ATTESTOR_DAILY_CAP: { usedBy: 'all', sensitivity: 'public', description: 'registry.attest calls allowed per UTC day; alerts at 80%.' },
   INDEXER_START_LEDGER: { usedBy: 'indexer', sensitivity: 'public', description: 'First ledger for a fresh indexer; unset starts near the oldest retained ledger (runbook: indexer-backfill).' },
+  JSON_BODY_LIMIT: { usedBy: 'api', sensitivity: 'public', description: 'Max JSON request body (body-parser syntax, e.g. 100kb); larger bodies get a 413.' },
+  UPLOAD_BODY_LIMIT: { usedBy: 'api', sensitivity: 'public', description: 'Max raw upload body for media and evidence (image/*, video/mp4, application/pdf); larger bodies get a 413.' },
+  COMPRESSION_THRESHOLD_BYTES: { usedBy: 'api', sensitivity: 'public', description: 'JSON GET responses at or above this size are compressed (brotli, else gzip).' },
+  IDEMPOTENCY_RETENTION_DAYS: { usedBy: 'worker', sensitivity: 'public', description: 'The maintenance job deletes idempotency keys older than this many days.' },
 };
 
 const SENSITIVITY_LABEL: Record<Sensitivity, string> = {

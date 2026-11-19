@@ -9,6 +9,7 @@ import { quote as priceQuote, ceilingPrice, tierIndex } from '../pools/pricing.j
 import { renderShareCard } from '../sharecards/sharecard.js';
 import { tiersUsdcFromJson, publicOffer } from './catalog.controller.js';
 import { type AuthedUser, CurrentUser, parse, Public, Roles } from './http.js';
+import { CACHE_CONTROL } from './http-setup.js';
 import { prepareAction, walletOf } from './prepare.js';
 import { SERVICES, type Services } from './services.js';
 import type { Prisma } from '../generated/prisma/client.js';
@@ -101,7 +102,7 @@ export class PoolsController {
   }
 
   /** Public preview used by WhatsApp links. */
-  @Public() @Get('p/:slug')
+  @Public() @Get('p/:slug') @Header('Cache-Control', CACHE_CONTROL.livePreview)
   async preview(@Param('slug') slug: string) {
     const pool = await this.s.prisma.pool.findUnique({ where: { shareSlug: slug } });
     if (!pool) throw new NotFoundException('pool not found');
@@ -143,7 +144,7 @@ export class PoolsController {
   }
 
   /** `?variant=wide|square` (#175) and `?lang=pcm` (#176); each combination is a distinct URL, so caches key on both. */
-  @Public() @Get('pools/:id/sharecard.png') @Header('Content-Type', 'image/png') @Header('Cache-Control', 'public, max-age=60')
+  @Public() @Get('pools/:id/sharecard.png') @Header('Content-Type', 'image/png') @Header('Cache-Control', CACHE_CONTROL.shareCard)
   async shareCard(@Param('id') id: string, @Query() query: unknown) {
     const q = parse(z.object({
       variant: z.enum(['wide', 'square']).default('wide'),

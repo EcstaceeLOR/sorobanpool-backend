@@ -11,7 +11,7 @@ import type { ErrorReporter } from '../observability/errors.js';
 import type { Services } from '../app/services.js';
 import { combineQuotes } from '../fx/fx.js';
 import { dispatchDue, NotificationProducer, queueDeadlineReminders } from '../notifications/dispatcher.js';
-import { checkSponsor, expireOffers, MismatchTracker, reconcilePools, refreshFx } from './maintenance.js';
+import { checkSponsor, expireOffers, MismatchTracker, purgeIdempotencyKeys, reconcilePools, refreshFx } from './maintenance.js';
 
 /**
  * Soroban RPC adapter for the indexer. The Indexer treats `endLedger` as inclusive, but the RPC's `endLedger`
@@ -171,6 +171,8 @@ export function startMaintenance(s: Services, intervalMs = 300_000): Runner {
     if (n) console.log(`[maintenance] expired ${n} offer(s)`);
     const reminded = await queueDeadlineReminders(s.prisma, s.now());
     if (reminded) console.log(`[maintenance] queued ${reminded} deadline reminder(s)`);
+    const purged = await purgeIdempotencyKeys(s.prisma, s.now(), s.env.IDEMPOTENCY_RETENTION_DAYS);
+    if (purged) console.log(`[maintenance] deleted ${purged} expired idempotency key(s)`);
     const bad = tracker.persistent(await reconcilePools(s.prisma, s.chain as never, A.poolOnly));
     for (const m of bad) console.error(`[reconcile] ALERT pool ${m.poolId} ${m.field}: db=${m.db} chain=${m.chain}`);
     const h = await checkSponsor(s.chain, s.env.SPONSOR_MIN_XLM);

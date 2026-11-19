@@ -1,4 +1,4 @@
-import { chainState, checkSponsor, expireOffers, MismatchTracker, reconcilePools, toStroopsString } from './maintenance.js';
+import { chainState, checkSponsor, expireOffers, MismatchTracker, purgeIdempotencyKeys, reconcilePools, toStroopsString } from './maintenance.js';
 import { startHarness, type Harness } from '../../test/harness.js';
 
 describe('checkSponsor', () => {
@@ -65,5 +65,36 @@ describe('reconcile', () => {
     expect(t.persistent(found)).toEqual([]); // first sighting: could be indexer lag
     expect(t.persistent(found)).toHaveLength(2); // second: real
     expect(t.persistent([])).toEqual([]);
+  });
+});
+
+describe('purgeIdempotencyKeys (#173)', () => {
+  let h: Harness;
+  beforeAll(async () => { h = await startHarness(); });
+  afterAll(async () => { await h.close(); });
+
+  it('deletes keys older than the retention window in batches and keeps fresh ones', async () => {
+    const now = new Date('2026-03-10T00:00:00Z');
+    const day = 86_400_000;
+    const mk = (key: string, ageDays: number) =>
+      h.s.prisma.idempotencyKey.create({ data: { key, userId: 'u1', createdAt: new Date(now.getTime() - ageDays * day) } });
+    for (let i = 0; i < 5; i++) await mk(`old-${i}`, 8 + i);
+    await mk('edge', 6.9);
+    await mk('fresh', 1);
+
+    // batchSize 2 forces three batches for five expired keys.
+    expect(await purgeIdempotencyKeys(h.s.prisma, now, 7, 2)).toBe(5);
+    const left = (await h.s.prisma.idempotencyKey.findMany({ orderBy: { key: 'asc' } })).map((k) => k.key);
+    expect(left).toEqual(['edge', 'fresh']);
+    expect(await purgeIdempotencyKeys(h.s.prisma, now, 7, 2)).toBe(0);
+  });
+
+  it('stops after maxBatches so a large backlog drains over several runs', async () => {
+    const now = new Date('2026-03-10T00:00:00Z');
+    for (let i = 0; i < 6; i++) {
+      await h.s.prisma.idempotencyKey.create({ data: { key: `backlog-${i}`, userId: 'u2', createdAt: new Date('2026-01-01T00:00:00Z') } });
+    }
+    expect(await purgeIdempotencyKeys(h.s.prisma, now, 7, 2, 2)).toBe(4);
+    expect(await purgeIdempotencyKeys(h.s.prisma, now, 7, 2, 2)).toBe(2);
   });
 });

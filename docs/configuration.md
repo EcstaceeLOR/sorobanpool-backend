@@ -60,3 +60,7 @@ variable must be set for every role even if that role does not read it.
 | `FX_STATIC` | `1500,1505` | no | all | Comma-separated NGN-per-USD rates for the static FX provider (testnet/dev). |
 | `ATTESTOR_DAILY_CAP` | `500` | no | all | registry.attest calls allowed per UTC day; alerts at 80%. |
 | `INDEXER_START_LEDGER` | optional | no | indexer | First ledger for a fresh indexer; unset starts near the oldest retained ledger (runbook: indexer-backfill). |
+| `JSON_BODY_LIMIT` | `100kb` | no | api | Max JSON request body (body-parser syntax, e.g. 100kb); larger bodies get a 413. |
+| `UPLOAD_BODY_LIMIT` | `16mb` | no | api | Max raw upload body for media and evidence (image/*, video/mp4, application/pdf); larger bodies get a 413. |
+| `COMPRESSION_THRESHOLD_BYTES` | `1024` | no | api | JSON GET responses at or above this size are compressed (brotli, else gzip). |
+| `IDEMPOTENCY_RETENTION_DAYS` | `7` | no | worker | The maintenance job deletes idempotency keys older than this many days. |
