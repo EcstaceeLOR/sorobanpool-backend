@@ -50,7 +50,7 @@ describe('evidence', () => {
 describe('share card', () => {
   const input = {
     product: 'Mama Gold <Rice> 50kg', supplier: 'Tunde & Sons Ltd', currentPriceNaira: '45,000',
-    nextBreak: { unitsToGo: 30, priceNaira: '43,500' }, unitsToMoq: 0, progressPct: 140, deadlineLabel: 'closes Fri 9 Oct',
+    nextBreak: { unitsToGo: 30, priceNaira: '43,500' }, unitsToMoq: 0, progressPct: 140, deadline: new Date('2026-10-09T12:00:00Z'),
   };
   it('escapes user text and clamps progress', () => {
     const svg = shareCardSvg(input);

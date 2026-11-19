@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { callWithPolicy, CircuitBreaker, DEFAULT_BREAKER, PROVIDER_POLICIES, type CallPolicy } from '../common/resilience.js';
 
 /**
  * KYC / KYB provider port (brief 7.8). Candidate Nigerian providers are Smile ID, Dojah and Prembly; choosing one is
@@ -82,10 +83,37 @@ export class SandboxVerificationProvider implements VerificationProvider {
   }
 }
 
+/**
+ * Wraps any provider adapter with a per-call deadline, bounded retries and one circuit breaker for the whole provider
+ * (#177), so a hung KYC vendor fails the check quickly instead of holding the request open.
+ */
+export class ResilientVerificationProvider implements VerificationProvider {
+  readonly name: string;
+  readonly breaker: CircuitBreaker;
+
+  constructor(private readonly inner: VerificationProvider, private readonly policy: CallPolicy = PROVIDER_POLICIES.kyc, breaker?: CircuitBreaker) {
+    this.name = inner.name;
+    this.breaker = breaker ?? new CircuitBreaker(DEFAULT_BREAKER);
+  }
+
+  private call<T>(op: string, fn: () => Promise<T>): Promise<T> {
+    return callWithPolicy(`kyc:${this.name}:${op}`, fn, this.policy, this.breaker);
+  }
+
+  verifyBvn(bvn: string, claim: PersonClaim) { return this.call('bvn', () => this.inner.verifyBvn(bvn, claim)); }
+  verifyNin(nin: string, claim: PersonClaim) { return this.call('nin', () => this.inner.verifyNin(nin, claim)); }
+  liveness(selfie: string) { return this.call('liveness', () => this.inner.liveness(selfie)); }
+  faceMatch(selfie: string, identityRef: string) { return this.call('face', () => this.inner.faceMatch(selfie, identityRef)); }
+  verifyCac(rc: string, businessName: string) { return this.call('cac', () => this.inner.verifyCac(rc, businessName)); }
+  verifyBankAccountName(bank: string, account: string, expectedNames: string[]) {
+    return this.call('nuban', () => this.inner.verifyBankAccountName(bank, account, expectedNames));
+  }
+}
+
 export function createVerificationProvider(name: string, nodeEnv: string): VerificationProvider {
   if (name === 'sandbox') {
     if (nodeEnv === 'production') throw new Error('KYC_PROVIDER=sandbox is refused in production: it verifies nobody');
-    return new SandboxVerificationProvider();
+    return new ResilientVerificationProvider(new SandboxVerificationProvider());
   }
   throw new Error(`KYC_PROVIDER "${name}" has no adapter yet; see docs/decisions/0006-verification-provider-port.md`);
 }

@@ -16,6 +16,13 @@ import type { Prisma } from '../generated/prisma/client.js';
 
 const naira = (n: bigint) => n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
 
+/** Request bodies, exported so the OpenAPI examples are checked against exactly what the handlers parse (#178). */
+export const poolPrepareBody = z.object({
+  offerId: z.string(), fillDeadline: z.coerce.date(), hub: z.object({ address: z.string().min(3), contact: z.string().min(5) }),
+  pickupWindow: z.object({ from: z.string(), to: z.string() }), organizerFeeBp: z.number().int().min(0).max(200).default(0), clusterOnly: z.boolean().default(false),
+});
+export const commitBody = z.object({ units: z.number().int().positive(), method: z.enum(['USDC', 'NGN']).default('USDC') });
+
 @Controller()
 export class PoolsController {
   constructor(@Inject(SERVICES) private readonly s: Services) {}
@@ -28,10 +35,7 @@ export class PoolsController {
   /** Builds create_pool for the organizer and records the off-chain hub details under a unique hub hash. */
   @Roles('ORGANIZER') @Post('pools/prepare')
   async prepare(@CurrentUser() u: AuthedUser, @Body() body: unknown) {
-    const b = parse(z.object({
-      offerId: z.string(), fillDeadline: z.coerce.date(), hub: z.object({ address: z.string().min(3), contact: z.string().min(5) }),
-      pickupWindow: z.object({ from: z.string(), to: z.string() }), organizerFeeBp: z.number().int().min(0).max(200).default(0), clusterOnly: z.boolean().default(false),
-    }), body);
+    const b = parse(poolPrepareBody, body);
     const offer = await this.s.prisma.offer.findUnique({ where: { id: b.offerId } });
     if (!offer || offer.status !== 'LIVE' || offer.validUntil <= this.s.now()) throw new NotFoundException('offer is not available');
     const supplier = await this.s.prisma.user.findUniqueOrThrow({ where: { id: offer.supplierId } });
@@ -139,15 +143,20 @@ export class PoolsController {
     };
   }
 
+  /** `?variant=wide|square` (#175) and `?lang=pcm` (#176); each combination is a distinct URL, so caches key on both. */
   @Public() @Get('pools/:id/sharecard.png') @Header('Content-Type', 'image/png') @Header('Cache-Control', CACHE_CONTROL.shareCard)
-  async shareCard(@Param('id') id: string) {
+  async shareCard(@Param('id') id: string, @Query() query: unknown) {
+    const q = parse(z.object({
+      variant: z.enum(['wide', 'square']).default('wide'),
+      lang: z.enum(['en', 'pcm']).default('en'),
+    }), query ?? {});
     const { view, offer } = await this.poolView(BigInt(id));
     const unitsToMoq = Math.max(0, (view.moq ?? 0) - view.totalUnits);
     return new StreamableFile(await renderShareCard({
       product: offer?.title ?? 'Group buy', supplier: offer?.brand ?? 'Verified supplier', currentPriceNaira: view.currentUnitPriceNaira ?? '—',
       nextBreak: view.nextBreak ? { unitsToGo: view.nextBreak.unitsToGo, priceNaira: view.currentUnitPriceNaira ?? '—' } : undefined,
-      unitsToMoq, progressPct: view.progressPct, deadlineLabel: `closes ${view.fillDeadline.toDateString()}`,
-    }));
+      unitsToMoq, progressPct: view.progressPct, deadline: view.fillDeadline,
+    }, q.variant, q.lang === 'pcm' ? 'PCM' : 'EN'));
   }
 
   /** Thin wrappers that turn one user intent into a contract call; the contract enforces every rule. */
@@ -158,7 +167,7 @@ export class PoolsController {
     const units = () => parse(z.object({ units: z.number().int().positive() }), body).units;
     switch (action) {
       case 'commit': {
-        const b = parse(z.object({ units: z.number().int().positive(), method: z.enum(['USDC', 'NGN']).default('USDC') }), body);
+        const b = parse(commitBody, body);
         if (b.method === 'NGN') throw new BadRequestException({ error: 'NOT_IMPLEMENTED', message: 'Naira payments arrive with the anchor integration' });
         return prepareAction(this.s, 'group_buy', 'commit', A.commit(me, poolId, b.units));
       }
