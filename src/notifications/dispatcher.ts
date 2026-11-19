@@ -1,4 +1,5 @@
 import type { SmsSender } from '../auth/otp.service.js';
+import { callWithPolicy, CircuitBreaker, CircuitOpenError, DEFAULT_BREAKER, PROVIDER_POLICIES, type CallPolicy } from '../common/resilience.js';
 import type { DecodedEvent } from '../indexer/decode.js';
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { nextAllowedTime, render, shouldSendNow, type Lang, type TemplateName } from './templates.js';
@@ -6,6 +7,19 @@ import { nextAllowedTime, render, shouldSendNow, type Lang, type TemplateName } 
 type Db = Pick<PrismaClient, 'notification' | 'user' | 'pool' | 'offer' | 'commitment'>;
 
 export const MAX_ATTEMPTS = 5;
+
+/** Wraps the SMS adapter with a deadline, bounded retries and a breaker (#177). */
+export class ResilientSmsSender implements SmsSender {
+  readonly breaker: CircuitBreaker;
+
+  constructor(private readonly inner: SmsSender, private readonly policy: CallPolicy = PROVIDER_POLICIES.sms, breaker?: CircuitBreaker) {
+    this.breaker = breaker ?? new CircuitBreaker(DEFAULT_BREAKER);
+  }
+
+  send(phone: string, text: string): Promise<void> {
+    return callWithPolicy('sms', () => this.inner.send(phone, text), this.policy, this.breaker);
+  }
+}
 
 /** Queues an SMS. Quiet-hour deferral happens here so a restart never loses or early-sends a message. */
 export async function enqueue(db: Pick<PrismaClient, 'notification'>, userId: string, template: TemplateName, vars: Record<string, string | number>, now: Date): Promise<void> {
@@ -24,6 +38,9 @@ export async function dispatchDue(db: Db, sms: SmsSender, now: Date, batch = 50)
       await db.notification.update({ where: { id: n.id }, data: { status: 'SENT', sentAt: now, attempts: n.attempts + 1, lastError: null } });
       r.sent++;
     } catch (e) {
+      // The provider is known to be down: leave this and the rest of the batch pending, without spending attempts,
+      // and let a later run pick them up once the breaker half-opens.
+      if (e instanceof CircuitOpenError) break;
       const attempts = n.attempts + 1;
       const dead = attempts >= MAX_ATTEMPTS;
       await db.notification.update({
