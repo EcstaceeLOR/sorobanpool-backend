@@ -53,6 +53,14 @@ export class Metrics {
 
 export const METRICS = Symbol('METRICS');
 
+/**
+ * Histogram labels for one request (#146): the route template (never the raw URL, so ids cannot blow up label
+ * cardinality) and the status class, which is what the error-rate alert needs.
+ */
+export function httpLabels(method: string, routePath: string | undefined, status: number): { method: string; route: string; status_class: string } {
+  return { method, route: routePath ?? 'unmatched', status_class: `${Math.floor(status / 100)}xx` };
+}
+
 @Injectable()
 export class MetricsInterceptor implements NestInterceptor {
   constructor(@Inject(METRICS) private readonly m: Metrics) {}
@@ -63,10 +71,9 @@ export class MetricsInterceptor implements NestInterceptor {
     const start = process.hrtime.bigint();
     res.once('finish', () => {
       // Route pattern, never the raw URL, so ids cannot blow up label cardinality.
-      const route = req.route?.path ?? 'unmatched';
-      const labels = { method: req.method, route, status: String(res.statusCode) };
-      this.m.inc('http_requests_total', labels);
-      this.m.observe('http_request_duration_seconds', { method: req.method, route }, Number(process.hrtime.bigint() - start) / 1e9);
+      const h = httpLabels(req.method, req.route?.path, res.statusCode);
+      this.m.inc('http_requests_total', { method: h.method, route: h.route, status: String(res.statusCode) });
+      this.m.observe('http_request_duration_seconds', h, Number(process.hrtime.bigint() - start) / 1e9);
     });
     return next.handle();
   }

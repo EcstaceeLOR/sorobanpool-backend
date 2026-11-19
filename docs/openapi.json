@@ -1510,6 +1510,46 @@
         }
       }
     },
+    "/v1/health/live": {
+      "get": {
+        "operationId": "HealthController.live",
+        "tags": [
+          "Health"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/health/ready": {
+      "get": {
+        "operationId": "HealthController.ready",
+        "tags": [
+          "Health"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
     "/v1/images/{id}": {
       "get": {
         "operationId": "UploadsController.image",

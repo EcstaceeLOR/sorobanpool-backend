@@ -45,15 +45,16 @@ export function rpcPort(server: Pick<rpc.Server, 'getLatestLedger' | 'getHealth'
 }
 
 export interface Runner {
-  stop(): void;
+  /** Starts no new tick, and resolves once a tick already in progress has finished (graceful shutdown, #145). */
+  stop(): Promise<void>;
 }
 
 /** Runs `fn` every `ms`, never overlapping, logging failures instead of crashing the process. */
-function every(name: string, ms: number, fn: () => Promise<void>, reporter?: ErrorReporter): Runner {
+export function every(name: string, ms: number, fn: () => Promise<void>, reporter?: ErrorReporter): Runner {
   let busy = false;
-  const t = setInterval(async () => {
-    if (busy) return;
-    busy = true;
+  let stopped = false;
+  let current: Promise<void> = Promise.resolve();
+  const tick = async () => {
     try {
       await fn();
     } catch (e) {
@@ -62,8 +63,19 @@ function every(name: string, ms: number, fn: () => Promise<void>, reporter?: Err
     } finally {
       busy = false;
     }
+  };
+  const t = setInterval(() => {
+    if (busy || stopped) return;
+    busy = true;
+    current = tick();
   }, ms);
-  return { stop: () => clearInterval(t) };
+  return {
+    stop: async () => {
+      stopped = true;
+      clearInterval(t);
+      await current;
+    },
+  };
 }
 
 export function startIndexer(s: Services, server: rpc.Server, intervalMs = 5000): { runner: Runner; indexer: Indexer } {

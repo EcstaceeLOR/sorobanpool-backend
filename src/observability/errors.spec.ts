@@ -1,3 +1,4 @@
+import { REDACTED, scrubBreadcrumb, scrubEvent, type ScrubbableEvent } from '../common/pii.js';
 import { NoopReporter, createReporter, type ErrorReporter } from './errors.js';
 import { startHarness, type Harness } from '../../test/harness.js';
 
@@ -67,5 +68,44 @@ describe('SentryReporter delivery', () => {
       await Sentry.close(1000);
       await new Promise<void>((r) => server.close(() => r()));
     }
+  });
+});
+
+// #143: realistic events are scrubbed of phones, BVN/NIN-like ids and bearer tokens everywhere they appear.
+describe('PII scrubbing for error reports', () => {
+  const JWT = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1MSJ9.c2lnbmF0dXJl';
+  const leaks = ['+2348012345678', '08012345678', '22123456789', 'Bearer abc.def-123', JWT];
+
+  it.each([
+    ['message', { message: 'OTP send failed for +2348012345678' }],
+    ['exception value', { exception: { values: [{ value: 'BVN 22123456789 did not verify' }] } }],
+    ['extra data', { extra: { note: 'retrying 08012345678', nested: { header: 'Bearer abc.def-123' } } }],
+    ['contexts', { contexts: { auth: { raw: `token ${JWT}` } } }],
+    ['breadcrumbs', { breadcrumbs: [{ message: 'GET /v1/users/+2348012345678', data: { url: '/v1/kyc?bvn=22123456789' } }] }],
+    ['sensitive keys', { extra: { phone: '0801', bvn: '1', password: 'p', Authorization: 'x', accountNumber: '9' } }],
+  ])('removes PII from %s', (_where, event) => {
+    const out = JSON.stringify(scrubEvent(structuredClone(event) as ScrubbableEvent));
+    for (const leak of leaks) expect(out).not.toContain(leak);
+    expect(out).not.toMatch(/"(phone|bvn|password|Authorization|accountNumber)":"(?!\[redacted\])/);
+  });
+
+  it('drops request bodies, cookies, headers, query strings and the user', () => {
+    const event: ScrubbableEvent = {
+      request: { url: '/v1/auth/otp/verify?phone=%2B2348012345678', data: { phone: '+2348012345678' }, cookies: { s: 'x' }, headers: { authorization: 'Bearer t' }, query_string: 'phone=1' },
+      user: { id: 'u1' },
+    };
+    const out = scrubEvent(event);
+    expect(out.request).toEqual({ url: '/v1/auth/otp/verify' });
+    expect(out.user).toBeUndefined();
+  });
+
+  it('keeps ordinary diagnostic text and short numbers', () => {
+    const out = scrubEvent({ message: 'pool 42 failed at ledger 5123456', extra: { units: 12, state: 'Filled' } });
+    expect(out.message).toBe('pool 42 failed at ledger 5123456');
+    expect(out.extra).toEqual({ units: 12, state: 'Filled' });
+  });
+
+  it('scrubs breadcrumbs as they are recorded', () => {
+    expect(scrubBreadcrumb({ message: 'sms to 08012345678', data: { otp: '123456' } })).toEqual({ message: `sms to ${REDACTED}`, data: { otp: REDACTED } });
   });
 });

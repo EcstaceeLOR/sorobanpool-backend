@@ -1,4 +1,5 @@
 import * as Sentry from '@sentry/node';
+import { scrubBreadcrumb, scrubEvent } from '../common/pii.js';
 
 /** Where unexpected failures go. Expected ones (validation, auth, contract refusals) are never reported. */
 export interface ErrorReporter {
@@ -15,11 +16,10 @@ export class SentryReporter implements ErrorReporter {
     Sentry.init({
       dsn, environment, tracesSampleRate: 0,
       dataCollection: { userInfo: false, cookies: false, httpHeaders: false, httpBodies: [], urlQueryParams: false },
-      beforeSend(event) {
-        if (event.request) { delete event.request.data; delete event.request.cookies; delete event.request.headers; }
-        delete event.user;
-        return event;
-      },
+      // #143: phones, BVN/NIN-like ids, bearer tokens and JWTs are scrubbed from messages, extra data,
+      // contexts and breadcrumbs, both when a breadcrumb is recorded and again when the event is sent.
+      beforeSend: (event) => scrubEvent(event),
+      beforeBreadcrumb: (breadcrumb) => scrubBreadcrumb(breadcrumb),
     });
   }
   capture(e: unknown, where: string): void {

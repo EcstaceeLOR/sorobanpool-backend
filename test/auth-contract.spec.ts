@@ -24,6 +24,8 @@ const PUBLIC_ROUTES = new Set([
   'GET /v1/evidence/file',
   'GET /v1/fx/quote',
   'GET /v1/health',
+  'GET /v1/health/live',
+  'GET /v1/health/ready',
   'GET /v1/images/{id}',
   'GET /v1/metrics',
   'GET /v1/offers',
