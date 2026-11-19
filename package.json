@@ -17,6 +17,7 @@
     "lint": "oxlint --type-aware src/ test/",
     "test": "vitest run",
     "openapi": "UPDATE_OPENAPI=1 vitest run src/app/openapi.spec.ts",
+    "docs:config": "UPDATE_CONFIG_DOCS=1 vitest run src/config/env-docs.spec.ts",
     "test:watch": "vitest",
     "test:cov": "vitest run --coverage",
     "test:debug": "vitest --inspect-brk --no-file-parallelism",

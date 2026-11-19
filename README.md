@@ -157,7 +157,8 @@ test/             harness, software WebAuthn authenticator, testnet E2E
 - **Health and metrics**: `GET /v1/health`, `GET /v1/metrics` (Prometheus; `METRICS_TOKEN` is required in production).
 - **Errors**: `SENTRY_DSN` reports unexpected 500s and job crashes, without request bodies.
 - **Alerts** (log lines today): indexer lag over 20 ledgers, reconcile mismatch, sponsor balance low, attestor at 80% of its daily cap, FX divergence.
-- **Runbooks**: [docs/runbooks/](docs/runbooks/), covering TTL extension, notifications and maintenance, and indexer backfill.
+- **Runbooks**: [docs/runbooks/](docs/runbooks/), covering TTL extension, notifications and maintenance, indexer backfill, [sponsor account top-up and rotation](docs/runbooks/sponsor-account.md), and [database restore and read-model rebuild](docs/runbooks/restore-and-rebuild.md).
+- **Configuration**: every environment variable, its default and whether it is secret, in [docs/configuration.md](docs/configuration.md) (generated from `src/config/env.ts`).
 
 ## Contributing
 
