@@ -16,7 +16,7 @@ jobs:
       - run: pnpm lint
       - run: pnpm exec tsc --noEmit
       - run: pnpm build
-      - run: pnpm test
+      - run: pnpm test:cov   # tests plus per-module coverage floors (vitest.config.ts)
   contract-artifacts:
     # Fails when the vendored contract artefacts drift from the ref pinned in contracts.ref (#157).
     runs-on: ubuntu-latest
