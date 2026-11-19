@@ -114,8 +114,6 @@ model SupplierProfile {
   kybRecordId       String?
   submittedAt       DateTime @default(now())
   user              User     @relation(fields: [userId], references: [id])
-
-  @@index([kybStatus, submittedAt])
 }
 
 /// result is encrypted at the application layer (AES-256-GCM).
