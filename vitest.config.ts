@@ -13,13 +13,13 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       exclude: ['**/*.spec.ts', 'src/generated/**', 'src/dev/**'],
       reporter: ['text', 'json-summary'],
-      // Floors for the money-critical modules (#168). `pnpm test:cov` fails when one drops below its floor. These are
-      // starting values, deliberately below today's numbers: raise each to just under the figure CI prints for it.
+      // Floors for the money-critical modules (#168). `pnpm test:cov` fails when one drops below its floor. Each sits
+      // just under the coverage measured in CI when it was set (recorded in CONTRIBUTING.md); raise, never lower.
       thresholds: {
-        'src/pools/pricing.ts': { lines: 90, functions: 90, statements: 90, branches: 80 },
-        'src/relayer/**': { lines: 70, functions: 70, statements: 70, branches: 60 },
-        'src/keeper/**': { lines: 70, functions: 70, statements: 70, branches: 60 },
-        'src/indexer/projector.ts': { lines: 70, functions: 70, statements: 70, branches: 60 },
+        'src/pools/pricing.ts': { statements: 98, branches: 85, functions: 98, lines: 98 },
+        'src/relayer/**': { statements: 95, branches: 90, functions: 85, lines: 98 },
+        'src/keeper/**': { statements: 98, branches: 95, functions: 65, lines: 98 },
+        'src/indexer/projector.ts': { statements: 84, branches: 75, functions: 75, lines: 85 },
       },
     },
   },

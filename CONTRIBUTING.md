@@ -37,6 +37,20 @@ PGlite on port 3100.
 | `pnpm test:cov` fails on a threshold | Coverage of a money-critical module dropped below its floor (`vitest.config.ts`) | Add tests for the code you touched; never lower a floor to get green |
 | `pnpm install --frozen-lockfile` fails | `package.json` changed without the lockfile | Run `pnpm install` and commit `pnpm-lock.yaml` |
 
+## Coverage floors
+
+`pnpm test:cov` (run by CI) enforces per-module floors in `vitest.config.ts` for the money-critical code. Coverage when
+the floors were set (statements / branches / functions / lines, %):
+
+| Module | Measured | Floor |
+| --- | --- | --- |
+| `src/pools/pricing.ts` | 100 / 87.5 / 100 / 100 | 98 / 85 / 98 / 98 |
+| `src/relayer/**` | 96.96 / 93.75 / 87.5 / 100 | 95 / 90 / 85 / 98 |
+| `src/keeper/**` | 100 / 97.05 / 66.66 / 100 | 98 / 95 / 65 / 98 |
+| `src/indexer/projector.ts` | 85.71 / 76.66 / 77.77 / 86.81 | 84 / 75 / 75 / 85 |
+
+When a PR raises a module's coverage, raise its floor to just under the new figure and update this table.
+
 ## First-PR checklist
 
 - [ ] The PR references its issue (`Closes #N`) and has one logical change.
