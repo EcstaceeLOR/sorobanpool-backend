@@ -1,6 +1,7 @@
 import { Controller, Get, Inject, RequestMethod } from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants.js';
 import { PUBLIC_KEY, Public, ROLES_KEY } from './http.js';
+import { OPENAPI_EXAMPLES } from './openapi-examples.js';
 
 type Ctor = abstract new (...args: never[]) => object;
 
@@ -13,6 +14,7 @@ const join = (...p: string[]) => '/' + p.map((s) => s.replace(/^\/+|\/+$/g, ''))
 /**
  * Builds an OpenAPI 3.1 document from controller metadata: paths, methods, auth and role requirements, path parameters.
  * Request/response bodies are validated by zod inside handlers and are not described here; docs/api.md covers them.
+ * The most used operations carry request and response examples (openapi-examples.ts).
  */
 export function buildOpenApi(controllers: readonly Ctor[], prefix = '/v1'): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
@@ -31,13 +33,20 @@ export function buildOpenApi(controllers: readonly Ctor[], prefix = '/v1'): Reco
       const isPublic = Reflect.getMetadata(PUBLIC_KEY, handler) === true;
       const roles = (Reflect.getMetadata(ROLES_KEY, handler) as string[] | undefined) ?? [];
       const params = [...express.matchAll(/:(\w+)/g)].map((m) => ({ name: m[1]!, in: 'path', required: true, schema: { type: 'string' } }));
+      const operationId = `${c.name}.${name}`;
+      const ex = OPENAPI_EXAMPLES[operationId];
       (paths[path] ??= {})[METHODS[method]!] = {
-        operationId: `${c.name}.${name}`,
+        operationId,
         tags: [c.name.replace(/Controller$/, '')],
         ...(params.length ? { parameters: params } : {}),
         ...(isPublic ? { security: [] } : { security: [{ bearerAuth: [] }] }),
         ...(roles.length ? { 'x-roles': roles } : {}),
-        responses: { '200': { description: 'Success' }, '400': { description: 'Validation error' }, '429': { description: 'Rate limited' } },
+        ...(ex?.request !== undefined ? { requestBody: { content: { 'application/json': { example: ex.request } } } } : {}),
+        responses: {
+          '200': { description: 'Success', ...(ex ? { content: { 'application/json': { example: ex.response } } } : {}) },
+          '400': { description: 'Validation error' },
+          '429': { description: 'Rate limited' },
+        },
       };
     }
   }
