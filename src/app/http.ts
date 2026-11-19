@@ -9,6 +9,7 @@ import { AuthError } from '../auth/otp.service.js';
 import { SponsorshipError } from '../relayer/allowlist.js';
 import { TxRejected } from '../chain/inspect.js';
 import { SERVICES, type Services } from './services.js';
+import { currentRequestId } from '../observability/request-context.js';
 
 export interface AuthedUser {
   id: string;
@@ -67,24 +68,26 @@ export class ApiExceptionFilter implements ExceptionFilter {
   constructor(@Inject(SERVICES) private readonly s: Services) {}
   catch(e: unknown, host: ArgumentsHost): void {
     const res = host.switchToHttp().getResponse<{ status(n: number): { json(b: unknown): void } }>();
+    const requestId = currentRequestId();
     const send = (status: number, body: Record<string, unknown>) => res.status(status).json(body);
     if (e instanceof AuthError) {
       const status = e.code === 'OTP_RATE_LIMITED' ? 429 : e.code === 'INVALID_PHONE' ? 400 : 401;
-      return send(status, { error: e.code, message: e.message });
+      return send(status, { error: e.code, message: e.message, requestId });
     }
-    if (e instanceof AnchorError) return send(e.code === 'NOT_FOUND' ? 404 : e.code === 'FX_UNAVAILABLE' ? 503 : 400, { error: e.code, message: e.message });
-    if (e instanceof SponsorshipError) return send(e.code === 'CAP_REACHED' ? 429 : 403, { error: e.code, message: e.message });
-    if (e instanceof TxRejected) return send(e.code === 'WRONG_SIGNER' || e.code === 'SPONSOR_AUTH' ? 403 : 400, { error: e.code, message: e.message });
-    if (e instanceof ZodError) return send(400, { error: 'VALIDATION', message: e.message });
+    if (e instanceof AnchorError) return send(e.code === 'NOT_FOUND' ? 404 : e.code === 'FX_UNAVAILABLE' ? 503 : 400, { error: e.code, message: e.message, requestId });
+    if (e instanceof SponsorshipError) return send(e.code === 'CAP_REACHED' ? 429 : 403, { error: e.code, message: e.message, requestId });
+    if (e instanceof TxRejected) return send(e.code === 'WRONG_SIGNER' || e.code === 'SPONSOR_AUTH' ? 403 : 400, { error: e.code, message: e.message, requestId });
+    if (e instanceof ZodError) return send(400, { error: 'VALIDATION', message: e.message, requestId });
     if (e instanceof HttpException) {
       const body = e.getResponse();
-      return send(e.getStatus(), typeof body === 'string' ? { error: 'HTTP', message: body } : (body as Record<string, unknown>));
+      const response = typeof body === 'string' ? { error: 'HTTP', message: body } : body as Record<string, unknown>;
+      return send(e.getStatus(), { ...response, requestId });
     }
     const message = e instanceof Error ? e.message : String(e);
     const code = contractErrorCode(message);
     if (code !== undefined) return send(422, { error: 'CONTRACT_ERROR', contractCode: code, message: 'The transaction was refused by the contract' });
-    console.error(e);
+    console.error(JSON.stringify({ msg: 'http error', requestId, error: e instanceof Error ? e.message : String(e) }));
     this.s.reporter.capture(e, 'http');
-    return send(500, { error: 'INTERNAL', message: 'Something went wrong' });
+    return send(500, { error: 'INTERNAL', message: 'Something went wrong', requestId });
   }
 }

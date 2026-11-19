@@ -1,5 +1,6 @@
 import { callWithPolicy, CircuitBreaker, DEFAULT_BREAKER, PROVIDER_POLICIES, type BreakerOptions, type CallPolicy } from '../common/resilience.js';
 import type { FxSourceQuote } from './fx.js';
+import { requestHeaders } from '../observability/request-context.js';
 
 /**
  * Live NGN-per-USD sources (brief 7.7 `fx-refresh`, 7.10). Two independent kinds of price on purpose: a fiat FX feed
@@ -22,7 +23,7 @@ export const FX_SOURCE_REGISTRY: Record<string, FxSource> = {
   'er-api': {
     name: 'er-api',
     async fetch(f, signal) {
-      const d = (await json(await f('https://open.er-api.com/v6/latest/USD', { signal }))) as { result?: string; rates?: Record<string, number> };
+      const d = (await json(await f('https://open.er-api.com/v6/latest/USD', { signal, headers: requestHeaders() }))) as { result?: string; rates?: Record<string, number> };
       if (d.result !== 'success') throw new Error('er-api returned no result');
       return Number(d.rates?.NGN);
     },
@@ -31,7 +32,7 @@ export const FX_SOURCE_REGISTRY: Record<string, FxSource> = {
   coingecko: {
     name: 'coingecko',
     async fetch(f, signal) {
-      const d = (await json(await f('https://api.coingecko.com/api/v3/simple/price?ids=usd-coin&vs_currencies=ngn', { signal }))) as { 'usd-coin'?: { ngn?: number } };
+      const d = (await json(await f('https://api.coingecko.com/api/v3/simple/price?ids=usd-coin&vs_currencies=ngn', { signal, headers: requestHeaders() }))) as { 'usd-coin'?: { ngn?: number } };
       return Number(d['usd-coin']?.ngn);
     },
   },

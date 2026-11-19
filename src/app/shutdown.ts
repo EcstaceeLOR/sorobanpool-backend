@@ -13,6 +13,8 @@ export interface ShutdownTargets {
   runners: readonly Runner[];
   /** Closes the database pool (`prisma.$disconnect()`). */
   disconnect: () => Promise<void>;
+  /** Flushes and closes the configured telemetry exporter. */
+  shutdownTracing?: () => Promise<void>;
 }
 
 /** Drains in order: request intake first, then background ticks, then the database they both use. */
@@ -20,6 +22,7 @@ export async function shutdown(t: ShutdownTargets): Promise<void> {
   await t.closeHttp?.();
   await Promise.all(t.runners.map((r) => r.stop()));
   await t.disconnect();
+  await t.shutdownTracing?.();
 }
 
 export interface ShutdownOptions {

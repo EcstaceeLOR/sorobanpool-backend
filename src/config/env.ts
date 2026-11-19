@@ -64,6 +64,8 @@ export const envSchema = z.object({
   COMPRESSION_THRESHOLD_BYTES: z.coerce.number().int().nonnegative().default(1024),
   /** Idempotency keys older than this are deleted by the maintenance job (#173). */
   IDEMPOTENCY_RETENTION_DAYS: z.coerce.number().positive().default(7),
+  /** Minutes before a pending two-person admin action expires. */
+  ADMIN_ACTION_EXPIRY_MINUTES: z.coerce.number().int().min(1).max(10_080).default(30),
 });
 
 export type Env = z.infer<typeof envSchema>;
