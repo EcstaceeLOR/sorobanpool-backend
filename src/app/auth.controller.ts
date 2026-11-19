@@ -15,7 +15,7 @@ export async function rolesOf(s: Services, userId: string): Promise<string[]> {
 
 const phoneList = (csv: string) => new Set(csv.split(',').map((p) => normalizeNgPhone(p.trim())).filter((p): p is string => !!p));
 
-// Request bodies, exported so openapi.spec.ts can check the OpenAPI schemas in openapi-schemas.ts against them (#152).
+/** Request bodies, exported so openapi.spec.ts checks the OpenAPI schemas (#152) and examples (#178) against exactly what the handlers parse. */
 export const otpRequestBody = z.object({ phone: z.string() });
 export const otpVerifyBody = z.object({ phone: z.string(), code: z.string().regex(/^\d{6}$/) });
 export const refreshBody = z.object({ refreshToken: z.string().min(10) });

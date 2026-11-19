@@ -90,8 +90,10 @@ export function diffOpenApi(base: Doc, head: Doc): string[] {
       }
       const bParams = new Set((bo.parameters ?? []).filter((p) => p.required).map((p) => `${p.in}:${p.name}`));
       for (const p of ho.parameters ?? []) if (p.required && !bParams.has(`${p.in}:${p.name}`)) out.push(`${id}: new required ${p.in} parameter ${p.name}`);
-      // Only a documented optional body becoming required is breaking; documenting a body for the first time is not.
-      if (bo.requestBody && !bo.requestBody.required && ho.requestBody?.required) out.push(`${id}: request body is now required`);
+      // Only a documented optional body becoming required is breaking. Documenting a body for the first time is not, and
+      // neither is an example-only body (no schema, #178) gaining a schema and `required`: it never promised optionality.
+      const bodySchema = bo.requestBody?.content?.['application/json']?.schema;
+      if (bo.requestBody && bodySchema !== undefined && !bo.requestBody.required && ho.requestBody?.required) out.push(`${id}: request body is now required`);
       schema(bo.requestBody?.content?.['application/json']?.schema, ho.requestBody?.content?.['application/json']?.schema, `${id} body`, 'request');
       for (const [status, br] of Object.entries(bo.responses ?? {})) {
         schema(br.content?.['application/json']?.schema, ho.responses?.[status]?.content?.['application/json']?.schema, `${id} ${status}`, 'response');

@@ -17,6 +17,12 @@ jobs:
       - run: pnpm exec tsc --noEmit
       - run: pnpm build
       - run: pnpm test
+  contract-artifacts:
+    # Fails when the vendored contract artefacts drift from the ref pinned in contracts.ref (#157).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: bash scripts/check-contract-artifacts.sh
   docker:
     runs-on: ubuntu-latest
     steps:

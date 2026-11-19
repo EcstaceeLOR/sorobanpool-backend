@@ -1,6 +1,7 @@
 import { Controller, Get, Inject, RequestMethod } from '@nestjs/common';
 import { METHOD_METADATA, PATH_METADATA } from '@nestjs/common/constants.js';
 import { PUBLIC_KEY, Public, ROLES_KEY } from './http.js';
+import { OPENAPI_EXAMPLES } from './openapi-examples.js';
 import { API_SCHEMAS, OPERATION_BODIES } from './openapi-schemas.js';
 
 type Ctor = abstract new (...args: never[]) => object;
@@ -14,7 +15,7 @@ const join = (...p: string[]) => '/' + p.map((s) => s.replace(/^\/+|\/+$/g, ''))
 /**
  * Builds an OpenAPI 3.1 document from controller metadata: paths, methods, auth and role requirements, path parameters.
  * Request/response bodies come from openapi-schemas.ts for the operations listed there (#152); the rest are described
- * in docs/api.md.
+ * in docs/api.md. The most used operations also carry request and response examples (openapi-examples.ts, #178).
  */
 export function buildOpenApi(controllers: readonly Ctor[], prefix = '/v1'): Record<string, unknown> {
   const paths: Record<string, Record<string, unknown>> = {};
@@ -35,16 +36,22 @@ export function buildOpenApi(controllers: readonly Ctor[], prefix = '/v1'): Reco
       const params = [...express.matchAll(/:(\w+)/g)].map((m) => ({ name: m[1]!, in: 'path', required: true, schema: { type: 'string' } }));
       const operationId = `${c.name}.${name}`;
       const body = OPERATION_BODIES[operationId];
-      const json = (schema: unknown) => ({ 'application/json': { schema } });
+      const ex = OPENAPI_EXAMPLES[operationId];
+      // Schema (#152) and example (#178) share one media object when both exist.
+      const json = (schema: unknown, example: unknown) => ({
+        'application/json': { ...(schema !== undefined ? { schema } : {}), ...(example !== undefined ? { example } : {}) },
+      });
+      const hasRequest = body?.request !== undefined || ex?.request !== undefined;
+      const hasResponse = body?.response !== undefined || ex !== undefined;
       (paths[path] ??= {})[METHODS[method]!] = {
         operationId,
         tags: [c.name.replace(/Controller$/, '')],
         ...(params.length ? { parameters: params } : {}),
         ...(isPublic ? { security: [] } : { security: [{ bearerAuth: [] }] }),
         ...(roles.length ? { 'x-roles': roles } : {}),
-        ...(body?.request ? { requestBody: { required: true, content: json(body.request) } } : {}),
+        ...(hasRequest ? { requestBody: { required: true, content: json(body?.request, ex?.request) } } : {}),
         responses: {
-          '200': body?.response ? { description: 'Success', content: json(body.response) } : { description: 'Success' },
+          '200': hasResponse ? { description: 'Success', content: json(body?.response, ex?.response) } : { description: 'Success' },
           '400': { description: 'Validation error' },
           '429': { description: 'Rate limited' },
         },

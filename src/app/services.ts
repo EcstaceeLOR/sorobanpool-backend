@@ -16,6 +16,7 @@ import { LocalObjectStore, S3ObjectStore, type ObjectStore } from '../evidence/s
 import { PrismaOtpStore, PrismaSessionStore, PrismaUsageStore } from '../persistence/prisma-stores.js';
 import { PiiCipher } from '../common/pii.js';
 import { createVerificationProvider, type VerificationProvider } from '../verification/provider.js';
+import { ResilientSmsSender } from '../notifications/dispatcher.js';
 import { Attestor } from '../verification/attestor.js';
 
 export const SERVICES = Symbol('SERVICES');
@@ -92,7 +93,7 @@ export function buildServices(env: Env, prisma: PrismaClient, deployments: Deplo
   const fxNames = env.FX_SOURCES.split(',').map((x) => x.trim()).filter(Boolean);
   if (!o.fx && !fxNames.length && env.NODE_ENV === 'production') throw new Error('FX_SOURCES is required in production: static rates would price real money');
   const fx = o.fx ?? (fxNames.length ? new LiveFxProvider(fxNames) : new StaticFxProvider(env.FX_STATIC.split(',').map(Number).filter((n) => n > 0)));
-  const sms = o.sms ?? new ConsoleSmsSender(env.OTP_DEV_ECHO);
+  const sms = o.sms ?? new ResilientSmsSender(new ConsoleSmsSender(env.OTP_DEV_ECHO));
   const services: Services = {
     sms,
     reporter: o.reporter ?? createReporter(env.SENTRY_DSN, env.NODE_ENV),

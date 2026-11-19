@@ -50,6 +50,19 @@ describe('openapi breaking-change diff (#153)', () => {
     expect(diffOpenApi(base, head)).toEqual([]);
   });
 
+  it('treats an example-only body becoming a required, schema-described body as additive', () => {
+    const base = spec({ '/v1/x': { post: op({ requestBody: { content: { 'application/json': { example: { a: 'x' } } } } }) } });
+    const head = spec({ '/v1/x': { post: op({ requestBody: body({ type: 'object', properties: { a: { type: 'string' } }, required: ['a'] }) }) } });
+    expect(diffOpenApi(base, head)).toEqual([]);
+  });
+
+  it('flags a documented optional body becoming required', () => {
+    const schema = { type: 'object', properties: { a: { type: 'string' } } };
+    const base = spec({ '/v1/x': { post: op({ requestBody: { content: { 'application/json': { schema } } } }) } });
+    const head = spec({ '/v1/x': { post: op({ requestBody: body(schema) }) } });
+    expect(diffOpenApi(base, head)).toEqual(['POST /v1/x: request body is now required']);
+  });
+
   it('flags a new required parameter', () => {
     const base = spec({ '/v1/q': { get: op() } });
     const head = spec({ '/v1/q': { get: op({ parameters: [{ name: 'units', in: 'query', required: true }] }) } });
