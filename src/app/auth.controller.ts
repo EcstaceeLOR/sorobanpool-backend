@@ -15,13 +15,18 @@ export async function rolesOf(s: Services, userId: string): Promise<string[]> {
 
 const phoneList = (csv: string) => new Set(csv.split(',').map((p) => normalizeNgPhone(p.trim())).filter((p): p is string => !!p));
 
+// Request bodies, exported so openapi.spec.ts can check the OpenAPI schemas in openapi-schemas.ts against them (#152).
+export const otpRequestBody = z.object({ phone: z.string() });
+export const otpVerifyBody = z.object({ phone: z.string(), code: z.string().regex(/^\d{6}$/) });
+export const refreshBody = z.object({ refreshToken: z.string().min(10) });
+
 @Controller('auth')
 export class AuthController {
   constructor(@Inject(SERVICES) private readonly s: Services) {}
 
   @Public() @Post('otp/request') @HttpCode(200)
   async request(@Body() body: unknown) {
-    const { phone } = parse(z.object({ phone: z.string() }), body);
+    const { phone } = parse(otpRequestBody, body);
     const r = await this.s.otp.request(phone);
     // Dev only (the env loader refuses OTP_DEV_ECHO in production): echo the code so scripts can log in.
     const devCode = this.s.env.OTP_DEV_ECHO ? devInbox.get(r.phone) : undefined;
@@ -30,7 +35,7 @@ export class AuthController {
 
   @Public() @Post('otp/verify') @HttpCode(200)
   async verify(@Body() body: unknown) {
-    const { phone, code } = parse(z.object({ phone: z.string(), code: z.string().regex(/^\d{6}$/) }), body);
+    const { phone, code } = parse(otpVerifyBody, body);
     const normalised = await this.s.otp.verify(phone, code);
     let user = await this.s.prisma.user.findUnique({ where: { phone: normalised } });
     if (!user) {
@@ -48,13 +53,13 @@ export class AuthController {
 
   @Public() @Post('refresh') @HttpCode(200)
   async refresh(@Body() body: unknown) {
-    const { refreshToken } = parse(z.object({ refreshToken: z.string().min(10) }), body);
+    const { refreshToken } = parse(refreshBody, body);
     return this.s.tokens.refresh(refreshToken, (id) => rolesOf(this.s, id));
   }
 
   @Public() @Post('logout') @HttpCode(204)
   async logout(@Body() body: unknown) {
-    const { refreshToken } = parse(z.object({ refreshToken: z.string().min(10) }), body);
+    const { refreshToken } = parse(refreshBody, body);
     await this.s.tokens.logout(refreshToken);
   }
 }
