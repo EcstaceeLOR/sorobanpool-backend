@@ -24,6 +24,14 @@ describe('SponsorshipPolicy', () => {
     await expect(p.authorize('u1', 'CGROUP', 'commit')).rejects.toMatchObject({ code: 'CAP_REACHED' });
     await expect(p.authorize('u2', 'CGROUP', 'commit')).resolves.toBeUndefined(); // other users unaffected
   });
+
+  it('allows only registry suspension calls through the separate admin authorization path', async () => {
+    const p = policy();
+    await expect(p.authorizeAdminAction('admin', 'CREG', 'suspend')).resolves.toBeUndefined();
+    await expect(p.authorizeAdminAction('admin', 'CREG', 'unsuspend')).resolves.toBeUndefined();
+    await expect(p.authorizeAdminAction('admin', 'CREG', 'attest')).rejects.toMatchObject({ code: 'NOT_ALLOWED' });
+    await expect(p.authorizeAdminAction('admin', 'CCONFIG', 'suspend')).rejects.toMatchObject({ code: 'NOT_ALLOWED' });
+  });
 });
 
 describe('feeBump', () => {

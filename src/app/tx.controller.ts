@@ -26,7 +26,14 @@ export class TxController {
     }
     const wallet = await walletOf(this.s, u.id);
     const seen = inspectUserTx(b.txXdr, { sponsor: this.s.chain.sponsorAddress, passphrase: this.s.env.NETWORK_PASSPHRASE, userWallet: wallet, maxFeeStroops: MAX_FEE_STROOPS });
-    await this.s.policy.authorize(u.id, seen.contractId, seen.fn);
+    const isRegistrySuspension = seen.contractId === this.s.chain.id('registry') && ['suspend', 'unsuspend'].includes(seen.fn);
+    if (isRegistrySuspension) {
+      const admin = await this.s.prisma.userRole.findUnique({ where: { userId_role: { userId: u.id, role: 'ADMIN' } } });
+      if (admin) await this.s.policy.authorizeAdminAction(u.id, seen.contractId, seen.fn);
+      else await this.s.policy.authorize(u.id, seen.contractId, seen.fn);
+    } else {
+      await this.s.policy.authorize(u.id, seen.contractId, seen.fn);
+    }
     await this.s.prisma.idempotencyKey.create({ data: { key: b.idempotencyKey, userId: u.id } });
     try {
       const r = await this.s.chain.submitUser(b.txXdr, b.signedAuthEntries, wallet);
