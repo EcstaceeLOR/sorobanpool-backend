@@ -1,0 +1,27 @@
+name: openapi-diff
+# Fails a pull request that breaks the public API contract in docs/openapi.json (#153): removed routes or response
+# fields, newly required request fields or params, tightened request types. Escape hatch: add the `breaking-api` label.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+permissions:
+  contents: read
+jobs:
+  diff:
+    if: ${{ !contains(github.event.pull_request.labels.*.name, 'breaking-api') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with: { fetch-depth: 0, persist-credentials: false }
+      - uses: actions/setup-node@v7
+        with: { node-version: 24 }
+      - name: Diff docs/openapi.json against the target branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          if ! git cat-file -e "origin/$BASE_REF:docs/openapi.json" 2>/dev/null; then
+            echo "No docs/openapi.json on $BASE_REF; nothing to compare."
+            exit 0
+          fi
+          git show "origin/$BASE_REF:docs/openapi.json" > "$RUNNER_TEMP/openapi-base.json"
+          node scripts/openapi-diff.ts "$RUNNER_TEMP/openapi-base.json" docs/openapi.json
