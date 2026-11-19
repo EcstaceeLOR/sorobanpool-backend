@@ -13,7 +13,7 @@ Auth is a bearer access token (15 min) from OTP login; refresh tokens rotate and
 
 Every `prepare` returns `{txXdr, authEntries[], validUntilLedger, contract, fn}`; the client signs only `authEntries` with its wallet and sends them to `/tx/submit`. Quotes read the indexed pool and are indicative; the contract is authoritative.
 
-**Operational**: `GET /health` · `GET /metrics` (Prometheus text; bearer `METRICS_TOKEN`, required in production) · `GET /openapi.json` · `GET /pools/:id/stream` (public Server-Sent Events: a `pool` event with state, units, tier and ledger now and after each indexed event, `ping` every 25s; at most 500 streams per API process).
+**Operational**: `GET /health` · `GET /health/live` · `GET /health/ready` (see below) · `GET /metrics` (Prometheus text; bearer `METRICS_TOKEN`, required in production) · `GET /openapi.json` · `GET /pools/:id/stream` (public Server-Sent Events: a `pool` event with state, units, tier and ledger now and after each indexed event, `ping` every 25s; at most 500 streams per API process).
 
 Rate limit: `RATE_LIMIT_PER_MIN` requests per client IP per minute (default 300), then `429 {error:"RATE_LIMITED", retryAfterSecs}`; health is exempt. Behind a proxy set Express `trust proxy` so the real client IP is used.
 
@@ -22,3 +22,64 @@ Body limits: JSON bodies over `JSON_BODY_LIMIT` (default `100kb`) and raw upload
 Compression and caching: JSON `GET` responses of at least `COMPRESSION_THRESHOLD_BYTES` (default 1024) are sent with brotli when the client accepts it, otherwise gzip, with `Vary: Accept-Encoding`. Public routes set `Cache-Control` by class (`src/app/http-setup.ts`): `GET /offers` and `GET /offers/:id` use `public, max-age=60, stale-while-revalidate=300`; `GET /p/:slug` (live progress) uses `public, max-age=15, stale-while-revalidate=60`; `GET /pools/:id/sharecard.png` uses `public, max-age=60`, so WhatsApp and CDN previews refresh within a minute of a pool changing. Authenticated routes set no `Cache-Control`.
 
 `docs/openapi.json` (also served at `/v1/openapi.json`) lists every route with method, auth requirement, roles (`x-roles`) and path parameters. It is generated from controller metadata (`pnpm openapi` after changing routes; a test fails if it is stale). It does not describe request or response schemas; this file does. The most used operations (OTP login and refresh, offer list and detail, FX quote, pool list, read and quote, pool prepare and commit) carry request and response examples from `src/app/openapi-examples.ts`, each request example checked against the handler's zod schema by `openapi.spec.ts`.
+
+## Health probes
+
+`GET /health/live` answers `200 {status:"ok"}` whenever the process is serving and never touches a dependency, so a database or RPC outage cannot put the container into a restart loop. `GET /health` stays as before and behaves the same way.
+
+`GET /health/ready` checks each dependency independently, each bounded at 2s:
+
+| Check | Fails when |
+| --- | --- |
+| `database` | `SELECT 1` errors or times out |
+| `rpc` | the Soroban RPC cannot return the latest ledger |
+| `indexer` | the indexer cursor is more than `LAG_ALERT_LEDGERS` (20) ledgers behind the RPC tip; `skipped` before its first run or when the tip is unknown |
+
+It answers `200 {status:"ready", checks}` or `503 {error:"NOT_READY", message, failing:[...], checks}`. Use liveness for restarts and readiness for routing:
+
+```yaml
+# docker-compose
+healthcheck:
+  test: ["CMD", "node", "-e", "fetch('http://localhost:3000/v1/health/live').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+  interval: 10s
+  timeout: 3s
+  retries: 3
+
+# Kubernetes
+livenessProbe:
+  httpGet: { path: /v1/health/live, port: 3000 }
+  periodSeconds: 10
+readinessProbe:
+  httpGet: { path: /v1/health/ready, port: 3000 }
+  periodSeconds: 10
+  failureThreshold: 3
+```
+
+All three health routes are exempt from the rate limit.
+
+## Graceful shutdown
+
+On `SIGTERM` or `SIGINT` the process stops accepting new connections and lets in-flight requests finish (`app.close()`), stops every scheduler so no new tick starts while a running tick completes, then disconnects Prisma, and exits 0. If that takes longer than 9s (`SHUTDOWN_TIMEOUT_MS` in `src/app/shutdown.ts`) it exits 1; long-lived `/pools/:id/stream` connections are the usual reason. Keep the platform's kill grace period above that (Docker `stop_grace_period`, Kubernetes `terminationGracePeriodSeconds`).
+
+## Metrics and alerts
+
+`http_request_duration_seconds` is a histogram labelled `method`, `route` (the route template, such as `/v1/offers/:id`, or `unmatched`; never a raw URL or id) and `status_class` (`2xx`, `4xx`, `5xx`). `http_requests_total` counts requests by `method`, `route` and `status`. Example Prometheus alert rules:
+
+```yaml
+groups:
+  - name: sorobanpool-api
+    rules:
+      - alert: ApiErrorRateHigh
+        expr: |
+          sum(rate(http_request_duration_seconds_count{status_class="5xx"}[5m]))
+            / sum(rate(http_request_duration_seconds_count[5m])) > 0.02
+        for: 10m
+        annotations:
+          summary: API 5xx error rate above 2%
+      - alert: ApiLatencyP95High
+        expr: |
+          histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket[5m]))) > 1
+        for: 10m
+        annotations:
+          summary: "p95 latency above 1s on {{ $labels.route }}"
+```

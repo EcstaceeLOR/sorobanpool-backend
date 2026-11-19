@@ -32,7 +32,8 @@ export class RateLimitGuard implements CanActivate {
   }
   canActivate(ctx: ExecutionContext): boolean {
     const req = ctx.switchToHttp().getRequest<{ ip?: string; path?: string }>();
-    if (req.path?.endsWith('/health')) return true;
+    // Liveness and readiness probes (#144) are exempt along with the original /health.
+    if (/\/health(\/(live|ready))?$/.test(req.path ?? '')) return true;
     const wait = this.limiter.take(req.ip ?? 'unknown', this.s.now().getTime());
     if (wait > 0) throw new HttpException({ error: 'RATE_LIMITED', message: `Too many requests; retry in ${wait}s`, retryAfterSecs: wait }, 429);
     return true;
