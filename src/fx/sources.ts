@@ -1,3 +1,4 @@
+import { callWithPolicy, CircuitBreaker, DEFAULT_BREAKER, PROVIDER_POLICIES, type BreakerOptions, type CallPolicy } from '../common/resilience.js';
 import type { FxSourceQuote } from './fx.js';
 
 /**
@@ -41,6 +42,11 @@ export const SANE_NGN_PER_USD = { min: 100, max: 100_000 } as const;
 
 export interface LiveFxOptions {
   timeoutMs?: number;
+  /** Retries per source per refresh (default PROVIDER_POLICIES.fx). */
+  retries?: number;
+  retryDelayMs?: number;
+  /** Per-source circuit breaker; a source that keeps failing is skipped until it half-opens. */
+  breaker?: Omit<BreakerOptions, 'now'>;
   cacheMs?: number;
   now?: () => number;
   fetchImpl?: typeof fetch;
@@ -54,6 +60,8 @@ export interface LiveFxOptions {
 export class LiveFxProvider {
   private cached: { at: number; quotes: FxSourceQuote[] } | null = null;
   private readonly sources: FxSource[];
+  private readonly policy: CallPolicy;
+  private readonly breakers = new Map<string, CircuitBreaker>();
 
   constructor(names: string[], private readonly o: LiveFxOptions = {}) {
     this.sources = names.map((n) => {
@@ -62,6 +70,14 @@ export class LiveFxProvider {
       return s;
     });
     if (this.sources.length < 2) throw new Error('FX_SOURCES needs at least two independent sources (brief 7.7)');
+    const d = PROVIDER_POLICIES.fx;
+    this.policy = { timeoutMs: o.timeoutMs ?? d.timeoutMs, retries: o.retries ?? d.retries, retryDelayMs: o.retryDelayMs ?? d.retryDelayMs };
+    for (const s of this.sources) this.breakers.set(s.name, new CircuitBreaker({ ...(o.breaker ?? DEFAULT_BREAKER), now: o.now }));
+  }
+
+  /** The breaker guarding one source, for health reporting and tests. */
+  breakerFor(name: string): CircuitBreaker | undefined {
+    return this.breakers.get(name);
   }
 
   async quotes(): Promise<FxSourceQuote[]> {
@@ -69,17 +85,16 @@ export class LiveFxProvider {
     if (this.cached && now - this.cached.at < (this.o.cacheMs ?? 30_000)) return this.cached.quotes;
     const f = this.o.fetchImpl ?? fetch;
     const results = await Promise.all(this.sources.map(async (s) => {
-      const ctl = new AbortController();
-      const t = setTimeout(() => ctl.abort(), this.o.timeoutMs ?? 5_000);
       try {
-        const v = await s.fetch(f, ctl.signal);
-        if (!Number.isFinite(v) || v < SANE_NGN_PER_USD.min || v > SANE_NGN_PER_USD.max) throw new Error(`implausible rate ${v}`);
+        const v = await callWithPolicy(`fx:${s.name}`, async (signal) => {
+          const rate = await s.fetch(f, signal);
+          if (!Number.isFinite(rate) || rate < SANE_NGN_PER_USD.min || rate > SANE_NGN_PER_USD.max) throw new Error(`implausible rate ${rate}`);
+          return rate;
+        }, this.policy, this.breakers.get(s.name));
         return { source: s.name, ngnPerUsd: v };
       } catch (e) {
         (this.o.onError ?? ((n, err) => console.error(`[fx] ${n}: ${err.message}`)))(s.name, e as Error);
         return null;
-      } finally {
-        clearTimeout(t);
       }
     }));
     const quotes = results.filter((q): q is FxSourceQuote => q !== null);
