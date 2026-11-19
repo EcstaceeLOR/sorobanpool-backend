@@ -35,7 +35,10 @@ export class PiiCipher {
   }
 }
 
-/** Shows only the last 4 characters of an identifier (BVN, NIN, account number) for display and logs. */
+/**
+ * The one masking rule for identifiers leaving the service (#132): BVN, NIN, CAC, account numbers and phones keep only
+ * their last 4 characters, everything before is `*`; values of 4 characters or fewer become `****`.
+ */
 export const mask = (id: string): string => (id.length <= 4 ? '****' : `${'*'.repeat(id.length - 4)}${id.slice(-4)}`);
 
 /**

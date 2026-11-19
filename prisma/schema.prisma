@@ -112,6 +112,7 @@ model SupplierProfile {
   bankAccountMasked String?
   kybStatus         String   @default("PENDING")
   kybRecordId       String?
+  submittedAt       DateTime @default(now())
   user              User     @relation(fields: [userId], references: [id])
 }
 
