@@ -10,7 +10,7 @@ export const SPONSORED_FUNCTIONS: Record<string, readonly string[]> = {
   supplier_bond: ['deposit', 'withdraw'],
 };
 
-/** Never sponsored: privileged or admin-only operations. */
+/** Refused on the ordinary user path; suspend/unsuspend have a separate admin-only path below. */
 export const NEVER_SPONSORED = ['upgrade', 'set_params', 'set_address', 'attest', 'revoke', 'suspend', 'pause', 'unpause'];
 
 export const DEFAULT_DAILY_CAP = 50;
@@ -46,6 +46,19 @@ export class SponsorshipPolicy {
   /** Checks the allow-list, then spends one unit of the user's daily allowance. */
   async authorize(userId: string, contractId: string, fn: string): Promise<void> {
     this.check(contractId, fn);
+    await this.consumeDailyAllowance(userId);
+  }
+
+  /** Allows only registry suspension operations after the caller has been checked as an ADMIN. */
+  async authorizeAdminAction(userId: string, contractId: string, fn: string): Promise<void> {
+    const name = this.contractNames.get(contractId);
+    if (name !== 'registry' || !['suspend', 'unsuspend'].includes(fn)) {
+      throw new SponsorshipError('NOT_ALLOWED', `${name ?? contractId}.${fn} is not an allowed admin action`);
+    }
+    await this.consumeDailyAllowance(userId);
+  }
+
+  private async consumeDailyAllowance(userId: string): Promise<void> {
     const day = this.now().toISOString().slice(0, 10);
     const n = await this.usage.increment(userId, day);
     if (n > this.dailyCap) throw new SponsorshipError('CAP_REACHED', 'Daily free-transaction limit reached');

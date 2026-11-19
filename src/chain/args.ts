@@ -76,6 +76,8 @@ export function poolTerms(t: PoolTermsInput): xdr.ScVal {
 export const A = {
   register: (user: string, r: Role, profileHash: string, cluster?: string) => [addr(user), role(r), bytes32(profileHash), optSym(cluster)],
   attest: (attestor: string, user: string, r: Role, verHash: string, level: number) => [addr(attestor), addr(user), role(r), bytes32(verHash), u32(level)],
+  suspend: (admin: string, user: string) => [addr(admin), addr(user)],
+  unsuspend: (admin: string, user: string) => [addr(admin), addr(user)],
   createPool: (organizer: string, terms: PoolTermsInput, hubHash: string, feeBp: number, cluster: string | undefined, fillDeadline: number) =>
     [addr(organizer), poolTerms(terms), bytes32(hubHash), u32(feeBp), optSym(cluster), u64(fillDeadline)],
   commit: (member: string, poolId: bigint, units: number) => [addr(member), u64(poolId), u32(units)],

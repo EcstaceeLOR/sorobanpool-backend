@@ -73,7 +73,7 @@ export class UsersController {
   @Get('me')
   async me(@CurrentUser() u: AuthedUser) {
     const user = await this.s.prisma.user.findUniqueOrThrow({ where: { id: u.id } });
-    return { id: user.id, phone: user.phone, displayName: user.displayName, language: user.language, walletAddress: user.walletAddress, roles: await rolesOf(this.s, u.id) };
+    return { id: user.id, phone: user.phone, displayName: user.displayName, language: user.language, walletAddress: user.walletAddress, status: user.status, roles: await rolesOf(this.s, u.id) };
   }
 
   @Patch('me')

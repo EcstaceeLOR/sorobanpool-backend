@@ -67,7 +67,18 @@ export class DisputesController {
   @Roles('ARBITER') @Get('arbiter/queue')
   async queue() {
     const rows = await this.s.prisma.dispute.findMany({ where: { state: 'OPEN' }, orderBy: { slaDueAt: 'asc' }, take: 100 });
-    return rows.map((d) => ({ ...view(d), msToSla: d.slaDueAt.getTime() - this.s.now().getTime() }));
+    const now = this.s.now().getTime();
+    return rows.map((d) => {
+      const msToSla = d.slaDueAt.getTime() - now;
+      const breached = msToSla <= 0;
+      return {
+        ...view(d),
+        msToSla,
+        slaSecondsLeft: Math.max(0, Math.ceil(msToSla / 1000)),
+        breached,
+        slaLabel: breached ? 'BREACHED' : 'ON_TRACK',
+      };
+    });
   }
 
   @Roles('ARBITER') @Get('arbiter/disputes/:id')

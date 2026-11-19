@@ -1,4 +1,4 @@
-import { riskOverview, type DisputeFact, type PoolFact } from './metrics.js';
+import { pairConcentration, riskOverview, riskRates, type DisputeFact, type PoolFact } from './metrics.js';
 
 const now = new Date('2026-10-10T12:00:00Z');
 const ago = (days: number) => new Date(now.getTime() - days * 86_400_000);
@@ -48,5 +48,44 @@ describe('riskOverview', () => {
   it('handles an empty system without dividing by zero', () => {
     const r = riskOverview([], [], now);
     expect(r).toMatchObject({ gmv: 0n, escrowHeld: 0n, failureRate7d: 0, flags: [] });
+  });
+
+  it('reports failure and dispute rates by slice for matching 7- and 30-day windows', () => {
+    const recent = pool({ id: 'recent', state: 'Settled', category: 'rice', nigerianState: 'Kano', endedAt: ago(3), deliveredAt: ago(3) });
+    const recentFailure = pool({ id: 'recent-failure', state: 'Failed', category: 'rice', nigerianState: 'Kano', endedAt: ago(5) });
+    const older = pool({ id: 'older', state: 'Settled', category: 'rice', nigerianState: 'Kano', endedAt: ago(14), deliveredAt: ago(14) });
+    const disputes: DisputeFact[] = [
+      { poolId: 'recent', supplier: recent.supplier, openedAt: ago(2) },
+      { poolId: 'older', supplier: older.supplier, openedAt: ago(12) },
+    ];
+    const rates = riskRates([recent, recentFailure, older], disputes, now, 'state').values[0]!;
+    expect(rates).toMatchObject({
+      value: 'Kano',
+      failedPools7d: 1, completedPools7d: 2, failureRate7d: 0.5,
+      disputedPools7d: 1, deliveredPools7d: 1, disputeRate7d: 1,
+      failedPools30d: 1, completedPools30d: 3, failureRate30d: 1 / 3,
+      disputedPools30d: 2, deliveredPools30d: 2, disputeRate30d: 1,
+    });
+  });
+
+  it('returns only pairs above the configured concentration threshold with their volume', () => {
+    const concentrated = [
+      pool({ organizer: 'O', supplier: 'S', volume: 10n }),
+      pool({ organizer: 'O', supplier: 'S', volume: 20n }),
+      pool({ organizer: 'O', supplier: 'S', volume: 30n }),
+      pool({ organizer: 'O', supplier: 'OTHER', volume: 40n }),
+    ];
+    expect(pairConcentration(concentrated, 0.75)).toMatchObject([
+      { organizer: 'O', supplier: 'S', pools: 3, shareOfOrganizer: 0.75, volume: 60n },
+    ]);
+    expect(() => pairConcentration(concentrated, 1.1)).toThrow(/threshold/);
+  });
+
+  it('uses zero rates when a slice has no completed or delivered pools', () => {
+    const rates = riskRates([pool({ category: 'produce', state: 'Open', endedAt: null })], [], now, 'category').values[0]!;
+    expect(rates).toMatchObject({
+      value: 'produce',
+      failureRate7d: 0, disputeRate7d: 0, failureRate30d: 0, disputeRate30d: 0,
+    });
   });
 });
