@@ -1,6 +1,7 @@
 import { Controller, Get, Inject, Query, StreamableFile } from '@nestjs/common';
 import { z } from 'zod';
 import { toStroops } from '../common/money.js';
+import { mask } from '../common/pii.js';
 import { PAIR_SHARE_ALERT, pairConcentration, riskOverview, riskRates, type PoolFact } from '../risk/metrics.js';
 import { type AuthedUser, CurrentUser, parse, Roles } from './http.js';
 import { walletOf } from './prepare.js';
@@ -80,10 +81,17 @@ export class ReportsController {
     return rows.map((p) => ({ id: p.id.toString(), state: p.state, organizer: p.organizerAddress, supplier: p.supplierAddress, totalUnits: p.totalUnits, escrowBalance: p.escrowBalance.toString(), frozenAmount: p.frozenAmount.toString() }));
   }
 
+  /** Read-only support lookup (#134): `q` is a user id or the last digits of a phone. Phones are masked; every call is audit logged. */
   @Roles('ADMIN') @Get('admin/users')
-  async users(@Query('q') q?: string) {
-    const rows = await this.s.prisma.user.findMany({ where: q ? { OR: [{ phone: { contains: q } }, { displayName: { contains: q, mode: 'insensitive' } }] } : {}, include: { roles: true }, orderBy: { createdAt: 'desc' }, take: 100 });
-    return rows.map((u) => ({ id: u.id, phone: u.phone, displayName: u.displayName, walletAddress: u.walletAddress, roles: u.roles.map((r) => ({ role: r.role, level: r.level })) }));
+  async users(@CurrentUser() admin: AuthedUser, @Query('q') q?: string) {
+    const term = q?.trim();
+    const rows = await this.s.prisma.user.findMany({
+      where: term ? { OR: [{ id: term }, { phone: { endsWith: term } }] } : {},
+      include: { roles: true, sessions: { orderBy: { createdAt: 'desc' }, take: 1, select: { createdAt: true } } },
+      orderBy: { createdAt: 'desc' }, take: 100,
+    });
+    await this.s.prisma.auditLog.create({ data: { actorId: admin.id, action: 'user.search', target: term ? mask(term) : '*', data: { results: rows.length } } });
+    return rows.map((u) => ({ id: u.id, phone: mask(u.phone), status: u.status, lastActive: u.sessions[0]?.createdAt ?? null, roles: u.roles.map((r) => ({ role: r.role, level: r.level })) }));
   }
 
   /** What a supplier was paid per settled pool: gross, platform and organizer fees, net. JSON, or CSV with ?format=csv. */

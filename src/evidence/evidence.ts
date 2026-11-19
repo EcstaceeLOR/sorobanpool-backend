@@ -5,6 +5,10 @@ export const MAX_EVIDENCE_BYTES = 15 * 1024 * 1024;
 export const ALLOWED_MIME = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'application/pdf'] as const;
 export const SIGNED_URL_TTL_SECONDS = 300;
 
+/** Supplier KYB document kinds (#131). Stored privately; only the owner and admins can get a read URL. */
+export const KYB_DOCUMENT_KINDS = ['KYB_CAC_CERTIFICATE', 'KYB_PROOF_OF_ADDRESS', 'KYB_DIRECTOR_ID'] as const;
+export const KYB_ALLOWED_MIME = ['application/pdf', 'image/jpeg', 'image/png'] as const;
+
 export function validateUpload(mime: string, sizeBytes: number): string | null {
   if (!(ALLOWED_MIME as readonly string[]).includes(mime)) return `file type ${mime} is not allowed`;
   if (sizeBytes <= 0 || sizeBytes > MAX_EVIDENCE_BYTES) return `file must be between 1 byte and ${MAX_EVIDENCE_BYTES / 1024 / 1024} MB`;

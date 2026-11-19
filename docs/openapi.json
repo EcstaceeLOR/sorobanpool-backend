@@ -682,6 +682,43 @@
         }
       }
     },
+    "/v1/admin/suppliers/{userId}/documents": {
+      "get": {
+        "operationId": "AdminController.supplierDocuments",
+        "tags": [
+          "Admin"
+        ],
+        "parameters": [
+          {
+            "name": "userId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "x-roles": [
+          "ADMIN"
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
     "/v1/admin/users": {
       "get": {
         "operationId": "ReportsController.users",
@@ -2624,6 +2661,30 @@
         "operationId": "UsersController.apply",
         "tags": [
           "Users"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success"
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/suppliers/documents": {
+      "get": {
+        "operationId": "UploadsController.myDocuments",
+        "tags": [
+          "Uploads"
         ],
         "security": [
           {

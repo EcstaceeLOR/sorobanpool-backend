@@ -1,7 +1,10 @@
-import { BadRequestException, Body, Controller, Get, HttpCode, Inject, NotFoundException, Param, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, HttpCode, Inject, NotFoundException, Param, Post, Query, Res } from '@nestjs/common';
+import type { Response } from 'express';
 import { z } from 'zod';
 import { A, type Role } from '../chain/args.js';
 import { sha256Hex } from '../common/canonical-json.js';
+import { mask } from '../common/pii.js';
+import { KYB_DOCUMENT_KINDS, signUrl } from '../evidence/evidence.js';
 import { type AuthedUser, CurrentUser, parse, Roles } from './http.js';
 import { prepareAction, walletOf } from './prepare.js';
 import { SERVICES, type Services } from './services.js';
@@ -24,16 +27,40 @@ export class AdminController {
     return prepareAction(this.s, 'registry', 'register', A.register(await walletOf(this.s, u.id), b.role as Role, profileHash, b.cluster));
   }
 
+  /**
+   * Review queue, oldest submission first. Filters: `status` (default PENDING), `state`, `from`/`to` (submission date).
+   * Cursor pagination: pass the `X-Next-Cursor` response header back as `cursor`; it is absent on the last page.
+   */
   @Roles('ADMIN') @Get('admin/suppliers')
-  async suppliers(@Query('status') status = 'PENDING') {
-    const rows = await this.s.prisma.supplierProfile.findMany({ where: { kybStatus: status }, orderBy: { userId: 'asc' }, take: 100 });
+  async suppliers(@Res({ passthrough: true }) res: Response, @Query() query: Record<string, string>) {
+    const q = parse(z.object({
+      status: z.string().default('PENDING'), state: z.string().optional(), from: z.coerce.date().optional(), to: z.coerce.date().optional(),
+      cursor: z.string().optional(), limit: z.coerce.number().int().min(1).max(100).default(50),
+    }), query);
+    const where = {
+      kybStatus: q.status,
+      ...(q.state ? { state: q.state } : {}),
+      ...(q.from || q.to ? { submittedAt: { ...(q.from ? { gte: q.from } : {}), ...(q.to ? { lte: q.to } : {}) } } : {}),
+    };
+    const page = await this.s.prisma.supplierProfile.findMany({
+      where, orderBy: [{ submittedAt: 'asc' }, { userId: 'asc' }], take: q.limit + 1, ...(q.cursor ? { cursor: { userId: q.cursor }, skip: 1 } : {}),
+    });
+    const rows = page.slice(0, q.limit);
+    if (page.length > q.limit) res.setHeader('X-Next-Cursor', rows[rows.length - 1]!.userId);
     const records = await this.s.prisma.verificationRecord.findMany({ where: { id: { in: rows.map((r) => r.kybRecordId).filter((x): x is string => !!x) } } });
     // Reviewers see each automated check's outcome; the personal data behind them stays encrypted.
     const checks = new Map(records.map((r) => {
       const c = this.s.pii.open<{ checks: Record<string, { ok: boolean; reason?: string } | null> }>(r.result as never).checks;
       return [r.id, Object.fromEntries(Object.entries(c).map(([k, v]) => [k, v ? (v.ok ? 'PASSED' : v.reason ?? 'FAILED') : 'NOT_PROVIDED']))];
     }));
-    return rows.map((r) => ({ ...r, kybChecks: (r.kybRecordId && checks.get(r.kybRecordId)) || null }));
+    return rows.map((r) => ({ ...r, cacNumber: mask(r.cacNumber), kybChecks: (r.kybRecordId && checks.get(r.kybRecordId)) || null }));
+  }
+
+  /** KYB documents a supplier uploaded (#131), each with a short-lived signed read URL. Admins only. */
+  @Roles('ADMIN') @Get('admin/suppliers/:userId/documents')
+  async supplierDocuments(@CurrentUser() admin: AuthedUser, @Param('userId') userId: string) {
+    const docs = await this.s.prisma.evidence.findMany({ where: { ownerId: userId, kind: { in: [...KYB_DOCUMENT_KINDS] }, NOT: { sha256: '' } }, orderBy: { createdAt: 'asc' } });
+    return docs.map((d) => ({ id: d.id, kind: d.kind, mime: d.mime, sha256: d.sha256, ...signUrl(this.s.env.JWT_SECRET + ':uploads', 'GET', d.objectKey, admin.id, this.s.now().getTime()) }));
   }
 
   /** Approves or rejects a supplier. Approval writes a verification hash on-chain with the attestor key. */

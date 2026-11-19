@@ -486,3 +486,56 @@ describe('naira deposits (mock anchor)', () => {
     h.s.anchor = saved;
   });
 });
+
+describe('admin supplier queue, documents and user lookup (#131-#134)', () => {
+  const UNMASKED = /(?<![\d*])\d{10,11}(?!\d)/;
+
+  it('pages the supplier queue with a cursor and filters by state', async () => {
+    const admin = await h.login(PHONE_ADMIN);
+    for (let i = 0; i < 3; i++) {
+      const s = await h.login(newPhone());
+      await h.http().post('/v1/suppliers/apply').set(auth(s.token)).send({
+        businessName: 'Queue Foods Ltd', cacNumber: 'RC7654321', address: '1 Queue Rd', state: 'Lagos', lga: 'Ikeja', categories: ['rice'], deliveryAreas: [{ state: 'Lagos' }],
+      }).expect(200);
+    }
+    const first = await h.http().get('/v1/admin/suppliers?state=Lagos&limit=2').set(auth(admin.token)).expect(200);
+    expect(first.body).toHaveLength(2);
+    expect(first.body.every((r: { state: string }) => r.state === 'Lagos')).toBe(true);
+    expect(first.body[0].cacNumber).toMatch(/^\*+4321$/);
+    const cursor = first.headers['x-next-cursor'];
+    expect(cursor).toBeTruthy();
+    const next = await h.http().get(`/v1/admin/suppliers?state=Lagos&limit=2&cursor=${cursor}`).set(auth(admin.token)).expect(200);
+    expect(next.body.map((r: { userId: string }) => r.userId)).not.toContain(first.body[0].userId);
+  });
+
+  it('lets suppliers upload KYB documents and only admins list them', async () => {
+    const s = await h.login(newPhone());
+    await h.http().post('/v1/uploads/sign').set(auth(s.token)).send({ kind: 'KYB_CAC_CERTIFICATE', mime: 'application/pdf', size: 10 }).expect(403);
+    await h.http().post('/v1/suppliers/apply').set(auth(s.token)).send({
+      businessName: 'Doc Foods Ltd', cacNumber: 'RC1112223', address: '2 Doc Rd', state: 'FCT', lga: 'Abuja Municipal', categories: ['rice'], deliveryAreas: [{ state: 'FCT' }],
+    }).expect(200);
+    await h.http().post('/v1/uploads/sign').set(auth(s.token)).send({ kind: 'KYB_CAC_CERTIFICATE', mime: 'video/mp4', size: 10 }).expect(400);
+    const signed = await h.http().post('/v1/uploads/sign').set(auth(s.token)).send({ kind: 'KYB_CAC_CERTIFICATE', mime: 'application/pdf', size: 10 }).expect(201);
+    await h.http().put(signed.body.uploadUrl).set('Content-Type', 'application/pdf').send(Buffer.from('%PDF-1.4 x')).expect(200);
+    expect((await h.http().get('/v1/suppliers/documents').set(auth(s.token)).expect(200)).body).toHaveLength(1);
+    await h.http().get(`/v1/admin/suppliers/${s.userId}/documents`).set(auth(s.token)).expect(403);
+    const admin = await h.login(PHONE_ADMIN);
+    const docs = await h.http().get(`/v1/admin/suppliers/${s.userId}/documents`).set(auth(admin.token)).expect(200);
+    expect(docs.body[0]).toMatchObject({ kind: 'KYB_CAC_CERTIFICATE' });
+    expect(docs.body[0].url).toContain('/v1/evidence/file');
+  });
+
+  it('searches users by id or phone suffix, masks phones and audit logs the lookup', async () => {
+    const phone = newPhone();
+    const u = await h.login(phone);
+    const admin = await h.login(PHONE_ADMIN);
+    const byPhone = await h.http().get(`/v1/admin/users?q=${phone.slice(-4)}`).set(auth(admin.token)).expect(200);
+    const hit = byPhone.body.find((r: { id: string }) => r.id === u.userId);
+    expect(hit.phone).toMatch(new RegExp(`^\*+${phone.slice(-4)}$`));
+    expect(hit).not.toHaveProperty('displayName');
+    expect((await h.http().get(`/v1/admin/users?q=${u.userId}`).set(auth(admin.token)).expect(200)).body).toHaveLength(1);
+    expect(await h.db.prisma.auditLog.findFirst({ where: { action: 'user.search', actorId: admin.userId } })).not.toBeNull();
+    expect(JSON.stringify(byPhone.body)).not.toMatch(UNMASKED);
+    expect(JSON.stringify(byPhone.body)).not.toContain(phone);
+  });
+});

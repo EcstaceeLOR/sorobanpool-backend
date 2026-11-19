@@ -11,6 +11,14 @@ Auth is a bearer access token (15 min) from OTP login; refresh tokens rotate and
 **Bond**: `POST /bonds/deposit/prepare`, `/bonds/withdraw/prepare`, `GET /bonds/me` (SUPPLIER)
 **Admin** (ADMIN): `GET /admin/suppliers`, `POST /admin/suppliers/:userId/decision`, `POST /admin/users/:userId/{attest|roles}`, `POST /admin/offers/:id/takedown`, `GET /admin/audit`
 
+**KYB documents**: suppliers who have applied upload documents through `POST /uploads/sign` with `kind` one of `KYB_CAC_CERTIFICATE`, `KYB_PROOF_OF_ADDRESS`, `KYB_DIRECTOR_ID` (PDF, JPEG or PNG only; private storage) and list their own with `GET /suppliers/documents`. Admins list a supplier's documents with signed 5-minute read URLs via `GET /admin/suppliers/:userId/documents`.
+
+`GET /admin/suppliers` filters by `status` (default `PENDING`), `state`, and `from`/`to` (submission time, ISO dates), sorted oldest submission first. `limit` is 1–100 (default 50); when more rows exist the response carries an `X-Next-Cursor` header to pass back as `cursor`. CAC numbers are masked.
+
+`GET /admin/users?q=` (read-only) matches a user id or the trailing digits of a phone number and returns `{id, phone, status, lastActive, roles:[{role, level}]}` with the phone masked to its last four digits. Every call writes a `user.search` audit log entry.
+
+Identifiers (BVN, NIN, CAC, account numbers, phones) leave the service only through `mask` in `src/common/pii.ts`: everything but the last four characters becomes `*`.
+
 `POST /admin/users/:id/suspend` and `/unsuspend` take `{reason}` (required, 1–500 characters), record the reason in the audit log, prepare a `registry.suspend` or `registry.unsuspend` transaction using the admin's wallet, and update the user's local status (`SUSPENDED` or `ACTIVE`). The response includes the prepared transaction fields and status; submit it through `POST /tx/submit`. Only a current ADMIN can submit these two registry operations, and they count against the usual daily sponsorship limit.
 
 Risk reporting (ADMIN): `GET /admin/risk/rates?slice=supplier|category|state` returns one row per selected slice with pool counts and failure/dispute rates for both 7- and 30-day windows. Failure rate is failed/expired/cancelled pools divided by completed pools; dispute rate is distinct disputed delivered pools divided by delivered pools in the window. A zero denominator produces a rate of `0`. Supplier values are wallet addresses, category values come from the pool's offer, and state values use the organizer's trader-profile state (falling back to the supplier profile, then `Unknown`). The response shape is `{slice, values:[{value, failedPools7d, completedPools7d, failureRate7d, disputedPools7d, deliveredPools7d, disputeRate7d, failedPools30d, completedPools30d, failureRate30d, disputedPools30d, deliveredPools30d, disputeRate30d}]}`; rates are decimal fractions.

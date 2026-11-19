@@ -179,7 +179,7 @@ export class UsersController {
         result: this.s.pii.seal({ cacNumber: b.cacNumber, directors, bankCode, bankAccountNumber, checks: { cac, bank } }) as never,
       },
     });
-    const data = { ...profile, ...(bankAccountNumber ? { bankAccountMasked: mask(bankAccountNumber) } : {}), kybRecordId: record.id, kybStatus: 'PENDING' };
+    const data = { ...profile, ...(bankAccountNumber ? { bankAccountMasked: mask(bankAccountNumber) } : {}), kybRecordId: record.id, kybStatus: 'PENDING', submittedAt: this.s.now() };
     await this.s.prisma.supplierProfile.upsert({ where: { userId: u.id }, create: { userId: u.id, ...data }, update: data });
     await this.s.prisma.userRole.upsert({ where: { userId_role: { userId: u.id, role: 'SUPPLIER' } }, create: { userId: u.id, role: 'SUPPLIER' }, update: {} });
     return { kybStatus: 'PENDING', checks: { cac: cac.ok ? 'PASSED' : cac.reason, bank: bank ? (bank.ok ? 'PASSED' : bank.reason) : 'NOT_PROVIDED' } };

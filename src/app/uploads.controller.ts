@@ -1,6 +1,6 @@
 import { BadRequestException, Body, Controller, ForbiddenException, Get, Header, HttpCode, Inject, NotFoundException, Param, Post, Put, Query, StreamableFile, UnauthorizedException } from '@nestjs/common';
 import { z } from 'zod';
-import { canReadEvidence, evidenceHash, signUrl, toPublicThumbnail, validateUpload, verifySignedUrl } from '../evidence/evidence.js';
+import { canReadEvidence, evidenceHash, KYB_ALLOWED_MIME, KYB_DOCUMENT_KINDS, signUrl, toPublicThumbnail, validateUpload, verifySignedUrl } from '../evidence/evidence.js';
 import { type AuthedUser, CurrentUser, parse, Public } from './http.js';
 import { SERVICES, type Services } from './services.js';
 
@@ -16,12 +16,16 @@ export class UploadsController {
   @Post('uploads/sign')
   async sign(@CurrentUser() u: AuthedUser, @Body() body: unknown) {
     const b = parse(z.object({
-      kind: z.enum(['DELIVERY', 'DISPUTE', 'WAYBILL', 'PRODUCT']), mime: z.string(), size: z.number().int(),
+      kind: z.enum(['DELIVERY', 'DISPUTE', 'WAYBILL', 'PRODUCT', ...KYB_DOCUMENT_KINDS]), mime: z.string(), size: z.number().int(),
       poolId: z.string().regex(/^\d+$/).optional(), disputeId: z.string().regex(/^\d+$/).optional(),
     }), body);
     const problem = validateUpload(b.mime, b.size);
     if (problem) throw new BadRequestException({ error: 'UPLOAD_INVALID', message: problem });
     if (b.kind === 'PRODUCT' && !u.roles.includes('SUPPLIER')) throw new ForbiddenException('only suppliers upload product images');
+    if ((KYB_DOCUMENT_KINDS as readonly string[]).includes(b.kind)) {
+      if (!(KYB_ALLOWED_MIME as readonly string[]).includes(b.mime)) throw new BadRequestException({ error: 'UPLOAD_INVALID', message: 'KYB documents must be PDF, JPEG or PNG' });
+      if (!(await this.s.prisma.supplierProfile.findUnique({ where: { userId: u.id } }))) throw new ForbiddenException('apply as a supplier before uploading KYB documents');
+    }
     const row = await this.s.prisma.evidence.create({
       data: { ownerId: u.id, poolId: b.poolId ? BigInt(b.poolId) : null, disputeId: b.disputeId ? BigInt(b.disputeId) : null, kind: b.kind, objectKey: '', sha256: '', mime: b.mime },
     });
@@ -57,6 +61,13 @@ export class UploadsController {
     const sha = evidenceHash(stored);
     await this.s.prisma.evidence.update({ where: { id: row.id }, data: { sha256: sha, mime: isPublic ? 'image/webp' : row.mime } });
     return { evidenceId: row.id, sha256: sha };
+  }
+
+  /** The caller's own uploaded KYB documents (#131); read them through `GET /evidence/:id/url`. */
+  @Get('suppliers/documents')
+  async myDocuments(@CurrentUser() u: AuthedUser) {
+    const docs = await this.s.prisma.evidence.findMany({ where: { ownerId: u.id, kind: { in: [...KYB_DOCUMENT_KINDS] }, NOT: { sha256: '' } }, orderBy: { createdAt: 'asc' } });
+    return docs.map((d) => ({ id: d.id, kind: d.kind, mime: d.mime, sha256: d.sha256, uploadedAt: d.createdAt }));
   }
 
   /** Short-lived read URL (5 minutes) for participants, arbiters and admins. */
