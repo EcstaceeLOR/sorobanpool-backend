@@ -1,0 +1,3 @@
+# sorobanpool-contracts ref (commit or tag) that the vendored artefacts must match.
+# Checked by scripts/check-contract-artifacts.sh in CI. After `pnpm sync:contracts <ref>`, update this line to the same ref.
+5084ac40edb045dca1ca7f56e7196756a3a1024b

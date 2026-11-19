@@ -2,6 +2,10 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { appControllers } from './app.module.js';
 import { buildOpenApi, OpenApiController } from './openapi.js';
 import { startHarness } from '../../test/harness.js';
+import type { ZodType } from 'zod';
+import { otpRequestBody, otpVerifyBody, refreshBody } from './auth.controller.js';
+import { OPENAPI_EXAMPLES } from './openapi-examples.js';
+import { commitBody, poolPrepareBody } from './pools.controller.js';
 
 const file = new URL('../../docs/openapi.json', import.meta.url);
 // The committed document describes the production surface: no dev faucet.
@@ -30,5 +34,47 @@ describe('openapi', () => {
       expect(r.body.openapi).toBe('3.1.0');
       expect(Object.keys(r.body.paths).length).toBeGreaterThan(30);
     } finally { await h.close(); }
+  });
+});
+
+describe('openapi examples (#178)', () => {
+  type Op = { operationId: string; requestBody?: { content: Record<string, { example: unknown }> }; responses: Record<string, { content?: Record<string, { example: unknown }> }> };
+  const ops = Object.values(prod().paths as Record<string, Record<string, Op>>).flatMap((m) => Object.values(m));
+  const byId = new Map(ops.map((o) => [o.operationId, o]));
+
+  /** The handlers' own request schemas: an example that does not parse here would be rejected by the API. */
+  const requestSchemas: Record<string, ZodType> = {
+    'AuthController.request': otpRequestBody,
+    'AuthController.verify': otpVerifyBody,
+    'AuthController.refresh': refreshBody,
+    'PoolsController.prepare': poolPrepareBody,
+    'PoolsController.act': commitBody,
+  };
+
+  it('covers auth, offers, pool read, quote and prepare calls', () => {
+    for (const id of ['AuthController.verify', 'CatalogController.list', 'CatalogController.one', 'PoolsController.get', 'PoolsController.quote', 'PoolsController.prepare']) {
+      expect(OPENAPI_EXAMPLES[id], id).toBeDefined();
+    }
+    expect(Object.keys(OPENAPI_EXAMPLES).length).toBeGreaterThanOrEqual(10);
+  });
+
+  it.each(Object.entries(OPENAPI_EXAMPLES))('%s is a real operation and its examples are in the document', (id, ex) => {
+    const op = byId.get(id);
+    expect(op, `${id} is not a route`).toBeDefined();
+    expect(op!.responses['200']!.content!['application/json']!.example).toEqual(ex.response);
+    if (ex.request !== undefined) expect(op!.requestBody!.content['application/json']!.example).toEqual(ex.request);
+    expect(JSON.parse(JSON.stringify(ex.response))).toEqual(ex.response); // plain JSON, nothing lost in transit
+  });
+
+  it.each(Object.entries(requestSchemas))('%s request example passes the handler schema', (id, schema) => {
+    const ex = OPENAPI_EXAMPLES[id]!;
+    expect(ex.request).toBeDefined();
+    const r = schema.safeParse(ex.request);
+    expect(r.success, JSON.stringify(r.error?.issues)).toBe(true);
+  });
+
+  it('every request example has a handler schema checked above', () => {
+    const withRequest = Object.entries(OPENAPI_EXAMPLES).filter(([, e]) => e.request !== undefined).map(([id]) => id).sort();
+    expect(withRequest).toEqual(Object.keys(requestSchemas).sort());
   });
 });

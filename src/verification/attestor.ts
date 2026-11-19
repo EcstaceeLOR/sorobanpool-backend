@@ -19,6 +19,7 @@ export const ATTESTOR_SPIKE_RATIO = 0.8;
  * `ver_hash = sha256(userId || providerRef || level || salt)` and a level: no personal data (brief 3.2, 7.8). The salt
  * stays off-chain, encrypted with the verification record, so the hash can be re-derived for an audit but not
  * guessed. A daily cap bounds the damage of a compromised attestor flow; admin `revoke` undoes a bad attestation.
+ * Rotating the key: docs/runbooks/attestor-rotation.md.
  */
 export class Attestor {
   constructor(
