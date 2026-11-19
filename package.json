@@ -27,7 +27,8 @@
     "postinstall": "prisma generate",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "sync:contracts": "scripts/sync-contract-artifacts.sh",
-    "dev:server": "nest build && node dist/dev/dev-server.js"
+    "dev:server": "nest build && node dist/dev/dev-server.js",
+    "seed": "nest build && node dist/dev/seed.js"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1146.0",

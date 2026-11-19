@@ -3,6 +3,7 @@ import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { NextFunction, Request, Response } from 'express';
 import helmet from 'helmet';
 import type { Env } from '../config/env.js';
+import { accessLog, stdoutSink, type AccessLogSink } from '../observability/access-log.js';
 
 /** Media and evidence uploads arrive as raw bodies; everything else is JSON. */
 export const UPLOAD_TYPES = ['image/*', 'video/mp4', 'application/pdf'];
@@ -23,8 +24,14 @@ type HttpEnv = Pick<Env, 'PUBLIC_APP_URL' | 'JSON_BODY_LIMIT' | 'UPLOAD_BODY_LIM
  * The HTTP surface shared by `main.ts` and the test harness, so tests exercise the same headers, limits and
  * compression that production serves (#171, #172, #174).
  */
-export function configureHttp(app: NestExpressApplication, env: HttpEnv): void {
+export function configureHttp(
+  app: NestExpressApplication,
+  env: HttpEnv,
+  opts: { accessLog?: AccessLogSink } = {},
+): void {
   app.setGlobalPrefix('v1');
+  // First, so every request is logged, including ones rejected by body limits, CORS or auth (#147).
+  app.use(accessLog(opts.accessLog ?? stdoutSink));
   app.use(helmet());
   app.enableCors({ origin: [env.PUBLIC_APP_URL], credentials: true });
   // Small JSON limit keeps a flood of large bodies from exhausting memory; uploads keep their own, larger limit.

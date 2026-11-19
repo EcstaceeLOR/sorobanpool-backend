@@ -82,7 +82,10 @@ export interface Harness {
   bindWallet(token: string, kp: Keypair): Promise<void>;
 }
 
-export async function startHarness(over: Record<string, string> = {}): Promise<Harness> {
+export async function startHarness(
+  over: Record<string, string> = {},
+  opts: { accessLog?: (line: string) => void } = {},
+): Promise<Harness> {
   const db = await startTestDb();
   const env = loadEnv({
     DATABASE_URL: 'postgresql://x', REDIS_URL: 'redis://x', S3_ENDPOINT: 'http://x', S3_BUCKET_PUBLIC: 'p', S3_BUCKET_EVIDENCE: 'e', S3_ACCESS_KEY_REF: 'a', S3_SECRET_KEY_REF: 'b',
@@ -95,7 +98,8 @@ export async function startHarness(over: Record<string, string> = {}): Promise<H
   const store = new LocalObjectStore(mkdtempSync(join(tmpdir(), 'sp-evidence-')));
   const s = buildServices(env, db.prisma, deployments, { chain, attestor, store, otpRandom: undefined });
   const app = await NestFactory.create<NestExpressApplication>(AppModule.forRoot(s), { logger: false });
-  configureHttp(app, env);
+  // Access logs are silent in tests unless a test captures them.
+  configureHttp(app, env, { accessLog: opts.accessLog ?? (() => {}) });
   await app.init();
   const http = () => request(app.getHttpServer());
   let n = 0;
