@@ -162,7 +162,7 @@ test/             harness, software WebAuthn authenticator, testnet E2E
 
 ## Contributing
 
-Good first areas: SMS template wording (EN, Pidgin, and Hausa, Yoruba or Igbo next), share-card designs, record/replay fixtures for provider adapters, indexer projections, and runbooks. Auth, the relayer, the attestor, settlement and anything touching money need two maintainer reviews and a test that fails without the change. See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+Good first areas: SMS template wording (EN, Pidgin, and Hausa, Yoruba or Igbo next), share-card designs, record/replay fixtures for provider adapters, indexer projections, and runbooks. Auth, the relayer, the attestor, settlement and anything touching money need two maintainer reviews and a test that fails without the change. See [CONTRIBUTING.md](CONTRIBUTING.md) (setup walkthrough, common failures and a first-PR checklist) and [SECURITY.md](SECURITY.md).
 
 ## Status
 
