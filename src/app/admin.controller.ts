@@ -74,6 +74,18 @@ export class AdminController {
     return { ok: true };
   }
 
+  @Roles('ADMIN') @Post('admin/users/:id/suspend') @HttpCode(200)
+  async suspend(@CurrentUser() admin: AuthedUser, @Param('id') id: string, @Body() body: unknown) {
+    const { reason } = parse(z.object({ reason: z.string().trim().min(1).max(500) }), body);
+    return this.setSuspension(admin, id, reason, true);
+  }
+
+  @Roles('ADMIN') @Post('admin/users/:id/unsuspend') @HttpCode(200)
+  async unsuspend(@CurrentUser() admin: AuthedUser, @Param('id') id: string, @Body() body: unknown) {
+    const { reason } = parse(z.object({ reason: z.string().trim().min(1).max(500) }), body);
+    return this.setSuspension(admin, id, reason, false);
+  }
+
   @Roles('ADMIN') @Post('admin/offers/:id/takedown') @HttpCode(200)
   async takedown(@CurrentUser() admin: AuthedUser, @Param('id') id: string) {
     await this.s.prisma.offer.update({ where: { id }, data: { status: 'TAKEN_DOWN' } });
@@ -91,5 +103,22 @@ export class AdminController {
     if (!user?.walletAddress) throw new BadRequestException({ error: 'NO_WALLET', message: 'The user has not bound a wallet' });
     // Manual admin review: the reference is the review itself. The capped attestor writes only a salted hash on-chain.
     return this.s.attestations.attest(userId, user.walletAddress, role, level, 'admin-review', 'admin');
+  }
+
+  private async setSuspension(admin: AuthedUser, userId: string, reason: string, suspended: boolean) {
+    const user = await this.s.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new NotFoundException('user not found');
+    if (!user.walletAddress) throw new BadRequestException({ error: 'NO_WALLET', message: 'The user has not bound a wallet' });
+    const action = suspended ? 'suspend' : 'unsuspend';
+    const prepared = await prepareAction(
+      this.s,
+      'registry',
+      action,
+      suspended ? A.suspend(await walletOf(this.s, admin.id), user.walletAddress) : A.unsuspend(await walletOf(this.s, admin.id), user.walletAddress),
+    );
+    const status = suspended ? 'SUSPENDED' : 'ACTIVE';
+    await this.s.prisma.user.update({ where: { id: userId }, data: { status } });
+    await this.audit(admin.id, `user.${action}`, userId, { reason });
+    return { ...prepared, status };
   }
 }

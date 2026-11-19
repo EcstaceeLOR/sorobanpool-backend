@@ -36,6 +36,8 @@ describe('contract argument builders', () => {
     const reg = A.register(g(), 'Supplier', '02'.repeat(32), undefined).map((v) => scValToNative(v));
     expect(reg[1]).toEqual(['Supplier']);
     expect(reg[3]).toBeNull();
+    expect(A.suspend(g(), g()).map((v) => typeof scValToNative(v))).toEqual(['string', 'string']);
+    expect(A.unsuspend(g(), g()).map((v) => typeof scValToNative(v))).toEqual(['string', 'string']);
     expect(A.dispatch(g(), 1n).map((v) => scValToNative(v))[2]).toBeNull();
   });
 

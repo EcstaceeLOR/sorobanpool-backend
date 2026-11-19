@@ -1,9 +1,11 @@
 import { Controller, Get, Inject, Query, StreamableFile } from '@nestjs/common';
+import { z } from 'zod';
 import { toStroops } from '../common/money.js';
-import { riskOverview, type PoolFact } from '../risk/metrics.js';
-import { type AuthedUser, CurrentUser, Roles } from './http.js';
+import { PAIR_SHARE_ALERT, pairConcentration, riskOverview, riskRates, type PoolFact } from '../risk/metrics.js';
+import { type AuthedUser, CurrentUser, parse, Roles } from './http.js';
 import { walletOf } from './prepare.js';
 import { SERVICES, type Services } from './services.js';
+import type { Prisma } from '../generated/prisma/client.js';
 
 const dec = (d: { toString(): string }): bigint => toStroops(d.toString());
 const str = (b: bigint): string => b.toString();
@@ -17,12 +19,48 @@ export class ReportsController {
   async overview() {
     const [pools, disputes] = await Promise.all([this.s.prisma.pool.findMany(), this.s.prisma.dispute.findMany()]);
     const supplierOf = new Map(pools.map((p) => [p.id, p.supplierAddress]));
-    const facts: PoolFact[] = pools.map((p) => ({
-      id: p.id.toString(), state: p.state, supplier: p.supplierAddress, organizer: p.organizerAddress, escrow: dec(p.escrowBalance),
-      gross: p.receivedUnits !== null && p.finalUnitPrice ? BigInt(p.receivedUnits) * dec(p.finalUnitPrice) : 0n, indexedAt: p.indexedAt, endedAt: p.endedAt,
-    }));
+    const facts = await this.poolFacts(pools);
     const r = riskOverview(facts, disputes.map((d) => ({ poolId: d.poolId.toString(), supplier: supplierOf.get(d.poolId) ?? '', openedAt: d.openedAt })), this.s.now());
-    return { ...r, gmv: str(r.gmv), escrowHeld: str(r.escrowHeld), generatedAt: this.s.now().toISOString() };
+    return { ...r, pairs: r.pairs.map((pair) => ({ ...pair, volume: str(pair.volume) })), gmv: str(r.gmv), escrowHeld: str(r.escrowHeld), generatedAt: this.s.now().toISOString() };
+  }
+
+  @Roles('ADMIN') @Get('admin/risk/rates')
+  async rates(@Query('slice') slice?: string) {
+    const b = parse(z.object({ slice: z.enum(['supplier', 'category', 'state']) }), { slice });
+    const [pools, disputes] = await Promise.all([this.s.prisma.pool.findMany(), this.s.prisma.dispute.findMany()]);
+    const facts = await this.poolFacts(pools);
+    return riskRates(facts, disputes.map((d) => ({ poolId: d.poolId.toString(), supplier: '', openedAt: d.openedAt })), this.s.now(), b.slice);
+  }
+
+  @Roles('ADMIN') @Get('admin/risk/pairs')
+  async pairs(@Query('threshold') threshold?: string) {
+    const b = parse(z.object({ threshold: z.coerce.number().min(0).max(1).optional() }), { threshold });
+    const pools = await this.s.prisma.pool.findMany();
+    const facts = await this.poolFacts(pools);
+    return pairConcentration(facts, b.threshold ?? PAIR_SHARE_ALERT).map((pair) => ({ ...pair, volume: str(pair.volume) }));
+  }
+
+  private async poolFacts(pools: Prisma.PoolGetPayload<object>[]): Promise<PoolFact[]> {
+    const organizerAddresses = [...new Set(pools.map((p) => p.organizerAddress))];
+    const supplierAddresses = [...new Set(pools.map((p) => p.supplierAddress))];
+    const [offers, organizers, suppliers] = await Promise.all([
+      this.s.prisma.offer.findMany({ where: { id: { in: [...new Set(pools.map((p) => p.offerId))] } }, select: { id: true, category: true } }),
+      this.s.prisma.user.findMany({ where: { walletAddress: { in: organizerAddresses } }, select: { walletAddress: true, trader: { select: { state: true } } } }),
+      this.s.prisma.user.findMany({ where: { walletAddress: { in: supplierAddresses } }, select: { walletAddress: true, supplier: { select: { state: true } } } }),
+    ]);
+    const categories = new Map(offers.map((offer) => [offer.id, offer.category]));
+    const organizerStates = new Map(organizers.map((user) => [user.walletAddress, user.trader?.state]));
+    const supplierStates = new Map(suppliers.map((user) => [user.walletAddress, user.supplier?.state]));
+    return pools.map((p) => ({
+      id: p.id.toString(), state: p.state, supplier: p.supplierAddress, organizer: p.organizerAddress,
+      category: categories.get(p.offerId), nigerianState: organizerStates.get(p.organizerAddress) ?? supplierStates.get(p.supplierAddress),
+      escrow: dec(p.escrowBalance),
+      gross: p.receivedUnits !== null && p.finalUnitPrice ? BigInt(p.receivedUnits) * dec(p.finalUnitPrice) : 0n,
+      volume: p.receivedUnits !== null && p.finalUnitPrice
+        ? BigInt(p.receivedUnits) * dec(p.finalUnitPrice)
+        : dec(p.escrowBalance) + dec(p.advancePaid),
+      indexedAt: p.indexedAt, endedAt: p.endedAt, deliveredAt: p.deliveredAt,
+    }));
   }
 
   @Roles('ADMIN') @Get('admin/disputes')
