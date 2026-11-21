@@ -1,0 +1,1 @@
+# Evidence upload safety`n`nEvidence uploads require verified content types, malware scanning before download, GPS handling appropriate to evidence class, and authenticated delivery status transitions.
