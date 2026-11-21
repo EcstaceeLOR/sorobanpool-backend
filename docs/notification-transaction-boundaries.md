@@ -1,0 +1,1 @@
+# Notification and transaction boundaries`n`nDelivery channels need per-event idempotency and subscription lifecycle handling, while relayed transaction records must retain owner, hash, ledger, and terminal status.
