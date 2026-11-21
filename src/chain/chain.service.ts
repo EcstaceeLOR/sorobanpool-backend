@@ -13,6 +13,14 @@ import type { Tracer } from '../observability/tracing.js';
 export const MAX_FEE_STROOPS = 50_000_000; // 5 XLM: a hard ceiling per sponsored transaction
 const AUTH_VALID_LEDGERS = 60; // ~5 minutes
 
+/** Bump simulated fees by this percentage to absorb minor ledger-state changes between simulation and submission. */
+const SIM_FEE_MARGIN_PERCENT = 20;
+/** How many times to re-simulate and retry after a resource-limit rejection before giving up. */
+const RESOURCE_RETRY_ATTEMPTS = 2;
+
+/** Stellar result codes that indicate a resource limit was exceeded (safe to re-simulate). */
+const RESOURCE_LIMIT_CODES = new Set(['txSOROBAN_INVALID', 'txRESOURCE_FEE_TOO_LOW', 'txINSUFFICIENT_FEE']);
+
 export interface PreparedTx {
   txXdr: string;
   /** Unsigned authorization entries (base64 XDR) the user must sign with their wallet. */
@@ -91,7 +99,11 @@ export class ChainService {
     }
     const sim = await this.server.simulateTransaction(tx);
     if (rpc.Api.isSimulationError(sim)) throw new Error(`simulation failed for ${fn}: ${sim.error}`);
-    return rpc.assembleTransaction(tx, sim).build();
+    const assembled = rpc.assembleTransaction(tx, sim).build();
+    // Apply safety margin: bump the total fee to reduce the chance of txINSUFFICIENT_FEE on submission.
+    const baseFee = parseInt(assembled.fee, 10);
+    const margined = Math.min(Math.ceil(baseFee * (1 + SIM_FEE_MARGIN_PERCENT / 100)), MAX_FEE_STROOPS);
+    return TransactionBuilder.cloneFrom(assembled, { fee: String(margined), networkPassphrase: this.o.passphrase }).build();
   }
 
   /** Read-only call (simulated, never submitted). */
@@ -247,12 +259,40 @@ export class ChainService {
 
   /** Signs, submits and waits. Callers hold the lock (see submitUser). */
   private async sendNow(tx: Transaction): Promise<TxResult> {
-    tx.sign(this.o.sponsor);
-    const sent = await this.server.sendTransaction(tx);
-    if (sent.status === 'ERROR') throw new Error(`submit failed: ${sent.errorResult?.toXDR('base64') ?? 'unknown'}`);
+    return this.sendWithResourceRetry(tx, RESOURCE_RETRY_ATTEMPTS);
+  }
+
+  private async sendWithResourceRetry(tx: Transaction, retriesLeft: number): Promise<TxResult> {
+    const signed = TransactionBuilder.cloneFrom(tx, { fee: tx.fee, networkPassphrase: this.o.passphrase }).build();
+    signed.sign(this.o.sponsor);
+    const sent = await this.server.sendTransaction(signed);
+    if (sent.status === 'ERROR') {
+      const code = sent.errorResult?.result().switch().name ?? '';
+      if (retriesLeft > 0 && RESOURCE_LIMIT_CODES.has(code)) {
+        // Re-simulate with fresh ledger state to get updated resource requirements.
+        const op = tx.operations[0] as Operation.InvokeHostFunction;
+        const rebuilt = await this.reSimulate(tx, op);
+        return this.sendWithResourceRetry(rebuilt, retriesLeft - 1);
+      }
+      throw new Error(`submit failed (${code}): ${sent.errorResult?.toXDR('base64') ?? 'unknown'}`);
+    }
     const done = await this.server.pollTransaction(sent.hash, { attempts: 30 });
     if (done.status !== rpc.Api.GetTransactionStatus.SUCCESS) throw new Error(`transaction ${sent.hash} ${done.status}`);
     return { hash: sent.hash, returnValue: done.returnValue ? scValToNative(done.returnValue) : undefined };
+  }
+
+  /** Re-simulates a transaction with a fresh sequence number and applies the fee margin. */
+  private async reSimulate(original: Transaction, op: Operation.InvokeHostFunction): Promise<Transaction> {
+    const acct = await this.server.getAccount(this.sponsorAddress);
+    const rebuilt = new TransactionBuilder(new Account(acct.accountId(), acct.sequenceNumber()), {
+      fee: BASE_FEE, networkPassphrase: this.o.passphrase,
+    }).addOperation(Operation.invokeHostFunction({ func: op.func, auth: op.auth })).setTimeout(120).build();
+    const sim = await this.server.simulateTransaction(rebuilt);
+    if (rpc.Api.isSimulationError(sim)) throw new Error(`re-simulation failed: ${sim.error}`);
+    const assembled = rpc.assembleTransaction(rebuilt, sim).build();
+    const baseFee = parseInt(assembled.fee, 10);
+    const margined = Math.min(Math.ceil(baseFee * (1 + SIM_FEE_MARGIN_PERCENT / 100)), MAX_FEE_STROOPS);
+    return TransactionBuilder.cloneFrom(assembled, { fee: String(margined), networkPassphrase: this.o.passphrase }).build();
   }
 }
 

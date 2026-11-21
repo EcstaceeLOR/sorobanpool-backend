@@ -122,6 +122,8 @@ export class NotificationProducer {
 }
 
 export const REMINDER_WINDOW_MS = 24 * 3_600_000;
+/** How far ahead to warn a supplier that their offer is expiring (48 hours). */
+export const OFFER_EXPIRY_WARN_MS = 48 * 3_600_000;
 
 /**
  * Open pools within 24h of their deadline that still lack the minimum get one reminder per member.
@@ -143,6 +145,28 @@ export async function queueDeadlineReminders(db: Db, now: Date): Promise<number>
       await enqueue(db, u.id, 'deadline_soon', { product: offer.title, hours, toGo }, now);
       queued++;
     }
+  }
+  return queued;
+}
+
+/**
+ * Warns suppliers whose offers expire within OFFER_EXPIRY_WARN_MS. Each offer gets at most one
+ * warning (compare-and-set on `expiryWarnedAt`). The supplier is looked up by their wallet address.
+ */
+export async function queueOfferExpiryWarnings(db: Db, now: Date): Promise<number> {
+  const horizon = new Date(now.getTime() + OFFER_EXPIRY_WARN_MS);
+  const offers = await db.offer.findMany({
+    where: { validUntil: { gt: now, lte: horizon }, expiryWarnedAt: null },
+  });
+  let queued = 0;
+  for (const offer of offers) {
+    const claimed = await db.offer.updateMany({ where: { id: offer.id, expiryWarnedAt: null }, data: { expiryWarnedAt: now } });
+    if (claimed.count === 0) continue;
+    const supplier = await db.user.findFirst({ where: { walletAddress: offer.supplierAddress } });
+    if (!supplier) continue;
+    const hours = Math.max(1, Math.ceil((offer.validUntil.getTime() - now.getTime()) / 3_600_000));
+    await enqueue(db, supplier.id, 'offer_expiry_warning', { product: offer.title, hours }, now);
+    queued++;
   }
   return queued;
 }

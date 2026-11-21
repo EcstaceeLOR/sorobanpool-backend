@@ -11,7 +11,8 @@ export type TemplateName =
   | 'ready_for_pickup'
   | 'confirm_pickup'
   | 'settled'
-  | 'dispute_update';
+  | 'dispute_update'
+  | 'offer_expiry_warning';
 
 /** SMS is the primary channel: every rendered message must fit in 160 characters. */
 export const SMS_MAX = 160;
@@ -60,6 +61,10 @@ const T: Record<TemplateName, Record<Lang, string>> = {
   dispute_update: {
     EN: 'Update on your report for {product}: {status}. Open the app for details.',
     PCM: 'Update on your complain for {product}: {status}. Open the app for details.',
+  },
+  offer_expiry_warning: {
+    EN: 'Your offer {product} expires in {hours}h. Renew it in the app to keep receiving orders.',
+    PCM: 'Your offer {product} go expire in {hours}h. Renew am for the app make orders still dey come.',
   },
 };
 
