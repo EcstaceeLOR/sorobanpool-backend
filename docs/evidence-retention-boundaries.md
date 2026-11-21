@@ -1,0 +1,1 @@
+# Evidence retention boundaries`n`nEvidence handling requires per-user and pool limits, server-side checksums, retention safeguards including legal holds, and opt-in channel adapters with bounded delivery behavior.
