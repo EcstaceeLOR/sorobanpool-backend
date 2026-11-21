@@ -1,0 +1,1 @@
+# Notification delivery guards`n`nDispatcher implementations must honor per-user limits, per-pool debounce windows, preference categories, critical-message bypasses, and template placeholder and length validation.
