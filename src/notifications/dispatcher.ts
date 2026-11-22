@@ -149,6 +149,52 @@ export async function queueDeadlineReminders(db: Db, now: Date): Promise<number>
   return queued;
 }
 
+/** How long before a delivered pool's confirmation window closes the members get their reminder (#95). */
+export const CONFIRM_REMINDER_LEAD_MS = 6 * 3_600_000;
+
+type ConfirmDb = Pick<PrismaClient, 'notification' | 'user' | 'pool' | 'offer' | 'commitment' | 'confirmationReminder'>;
+
+/** West Africa Time calendar day (UTC+1) of an instant, as YYYY-MM-DD. */
+const watDay = (at: Date): string => new Date(at.getTime() + 3_600_000).toISOString().slice(0, 10);
+
+/**
+ * Reminds the organizer and every member of a delivered pool, once each, `CONFIRM_REMINDER_LEAD_MS` before the
+ * confirmation window closes. Silence means auto-confirmation, so the message says so. Quiet hours defer the message
+ * to 07:00 WAT, unless the pool was delivered that same WAT day (a delivery-day exception) or the deferral would land
+ * after the window has closed, in which case no reminder is sent. `windows` are the contract's confirmation windows in
+ * seconds, for standard and perishable pools.
+ */
+export async function queueConfirmationReminders(
+  db: ConfirmDb, now: Date, windows: { standardSecs: number; perishableSecs: number },
+): Promise<number> {
+  const pools = await db.pool.findMany({ where: { state: 'Delivered', deliveredAt: { not: null, lte: now } } });
+  let queued = 0;
+  for (const pool of pools) {
+    if (!pool.deliveredAt) continue;
+    const offer = await db.offer.findUnique({ where: { id: pool.offerId } });
+    const windowSecs = offer?.perishable ? windows.perishableSecs : windows.standardSecs;
+    const windowEnd = new Date(pool.deliveredAt.getTime() + windowSecs * 1000);
+    if (now < new Date(windowEnd.getTime() - CONFIRM_REMINDER_LEAD_MS) || now >= windowEnd) continue;
+    const runAfter = watDay(pool.deliveredAt) === watDay(now) || shouldSendNow('confirm_window_ending', now) ? now : nextAllowedTime(now);
+    if (runAfter >= windowEnd) continue;
+    const members = await db.commitment.findMany({ where: { poolId: pool.id } });
+    const wallets = [...new Set([pool.organizerAddress, ...members.map((m) => m.memberAddress)])];
+    const users = await db.user.findMany({ where: { walletAddress: { in: wallets } } });
+    const hours = Math.max(1, Math.ceil((windowEnd.getTime() - now.getTime()) / 3_600_000));
+    const product = (offer?.title ?? 'your delivery').slice(0, 40); // keeps the SMS within 160 characters
+    for (const u of users) {
+      // Compare-and-set on the composite key: a repeated or concurrent run cannot send twice.
+      const claimed = await db.confirmationReminder.createMany({ data: [{ poolId: pool.id, userId: u.id, sentAt: now }], skipDuplicates: true });
+      if (claimed.count === 0) continue;
+      await db.notification.create({
+        data: { userId: u.id, channel: 'sms', template: 'confirm_window_ending', payload: { product, hours }, status: 'PENDING', runAfter },
+      });
+      queued++;
+    }
+  }
+  return queued;
+}
+
 /**
  * Warns suppliers whose offers expire within OFFER_EXPIRY_WARN_MS. Each offer gets at most one
  * warning (compare-and-set on `expiryWarnedAt`). The supplier is looked up by their wallet address.

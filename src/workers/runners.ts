@@ -12,9 +12,9 @@ import type { PrismaClient } from '../generated/prisma/client.js';
 import { Metrics } from '../observability/metrics.js';
 import type { Services } from '../app/services.js';
 import { combineQuotes } from '../fx/fx.js';
-import { dispatchDue, NotificationProducer, queueDeadlineReminders } from '../notifications/dispatcher.js';
+import { dispatchDue, NotificationProducer, queueConfirmationReminders, queueDeadlineReminders } from '../notifications/dispatcher.js';
 import {
-  checkSponsor, expireOffers, expireStaleAnchorTransfers, FINAL_POOL_STATES, MismatchTracker,
+  checkSponsorRunway, expireOffers, expireStaleAnchorTransfers, FINAL_POOL_STATES, MismatchTracker,
   pruneChainEvents, purgeIdempotencyKeys, reconcilePools, refreshFx,
 } from './maintenance.js';
 
@@ -293,6 +293,14 @@ export function startMaintenance(s: Services, intervalMs = 300_000): Runner {
     if (n) console.log(`[maintenance] expired ${n} offer(s)`);
     const reminded = await queueDeadlineReminders(s.prisma, s.now());
     if (reminded) console.log(`[maintenance] queued ${reminded} deadline reminder(s)`);
+    const windows = await keeperParams(s).catch((e: unknown) => {
+      console.error(`[maintenance] confirmation reminders skipped: ${(e as Error).message}`);
+      return undefined;
+    });
+    if (windows) {
+      const confirmed = await queueConfirmationReminders(s.prisma, s.now(), { standardSecs: windows.confirmWindowSecs, perishableSecs: windows.perishableConfirmWindowSecs });
+      if (confirmed) console.log(`[maintenance] queued ${confirmed} confirmation reminder(s)`);
+    }
     const purged = await purgeIdempotencyKeys(s.prisma, s.now(), s.env.IDEMPOTENCY_RETENTION_DAYS);
     if (purged) console.log(`[maintenance] deleted ${purged} expired idempotency key(s)`);
     const pruned = await pruneChainEvents(s.prisma, s.now(), s.env.CHAIN_EVENT_RETENTION_DAYS);
@@ -301,8 +309,9 @@ export function startMaintenance(s: Services, intervalMs = 300_000): Runner {
     if (expiredTransfers.expired) console.log(`[maintenance] expired ${expiredTransfers.expired} anchor transfer(s)`);
     const bad = tracker.persistent(await reconcilePools(s.prisma, s.chain as never, A.poolOnly));
     for (const m of bad) console.error(`[reconcile] ALERT pool ${m.poolId} ${m.field}: db=${m.db} chain=${m.chain}`);
-    const h = await checkSponsor(s.chain, s.env.SPONSOR_MIN_XLM);
-    if (h.low) console.error(`[maintenance] ALERT sponsor balance ${Number(h.balanceStroops) / 1e7} XLM is below ${s.env.SPONSOR_MIN_XLM}`);
+    const h = await checkSponsorRunway(s.prisma, s.chain, s.now(), { minXlm: s.env.SPONSOR_MIN_XLM, minRunwayDays: s.env.SPONSOR_MIN_RUNWAY_DAYS });
+    if (h.low && h.runwayDays === null) console.error(`[maintenance] ALERT sponsor balance ${Number(h.balanceStroops) / 1e7} XLM is below ${s.env.SPONSOR_MIN_XLM}`);
+    else if (h.low) console.error(`[maintenance] ALERT sponsor runway ${h.runwayDays} day(s) is below ${h.minRunwayDays}`);
   }, { reporter: s.reporter });
 }
 

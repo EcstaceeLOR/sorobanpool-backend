@@ -16,7 +16,7 @@ export const NEVER_SPONSORED = ['upgrade', 'set_params', 'set_address', 'attest'
 export const DEFAULT_DAILY_CAP = 50;
 
 export class SponsorshipError extends Error {
-  constructor(public readonly code: 'NOT_ALLOWED' | 'CAP_REACHED' | 'UNKNOWN_CONTRACT', message: string) {
+  constructor(public readonly code: 'NOT_ALLOWED' | 'CAP_REACHED' | 'UNKNOWN_CONTRACT' | 'UNEXPECTED_OPERATIONS', message: string) {
     super(message);
   }
 }

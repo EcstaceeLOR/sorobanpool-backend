@@ -423,7 +423,23 @@
           "images": {
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "url": {
+                  "type": "string"
+                },
+                "thumb": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "url",
+                "thumb"
+              ]
             }
           },
           "tiersNgn": {},

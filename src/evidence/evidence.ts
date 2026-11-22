@@ -61,3 +61,10 @@ export function verifySignedUrl(secret: string, purpose: 'GET' | 'PUT', p: { key
 export async function toPublicThumbnail(input: Uint8Array, width = 640): Promise<Buffer> {
   return sharp(input).rotate().resize({ width, withoutEnlargement: true }).webp({ quality: 72 }).toBuffer();
 }
+
+/** Widths of the WebP thumbnails made beside each product photo (#104): feeds use 320, detail views 800. */
+export const THUMB_WIDTHS = [320, 800] as const;
+export type ThumbWidth = (typeof THUMB_WIDTHS)[number];
+
+/** Object key of a thumbnail; it sits next to the original in the public bucket. */
+export const thumbKey = (objectKey: string, width: ThumbWidth): string => `${objectKey}@${width}.webp`;

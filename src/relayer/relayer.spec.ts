@@ -100,6 +100,24 @@ describe('feeBump', () => {
     expect(() => feeBump(sponsor, inner, Networks.TESTNET, '50')).toThrow(/lower than the inner/);
   });
 
+  it('refuses a multi-operation transaction before fee-bumping (#101)', () => {
+    const twoOps = new TransactionBuilder(new Account(user.publicKey(), '1'), { fee: '200', networkPassphrase: Networks.TESTNET })
+      .addOperation(Operation.payment({ destination: sponsor.publicKey(), asset: Asset.native(), amount: '1' }))
+      .addOperation(Operation.payment({ destination: sponsor.publicKey(), asset: Asset.native(), amount: '2' }))
+      .setTimeout(60)
+      .build();
+    twoOps.sign(user);
+    expect(() => feeBump(sponsor, twoOps, Networks.TESTNET, '400')).toThrow(/exactly one operation, found 2/);
+    let err: unknown;
+    try { feeBump(sponsor, twoOps, Networks.TESTNET, '400'); } catch (e) { err = e; }
+    expect(err).toBeInstanceOf(SponsorshipError);
+    expect((err as SponsorshipError).code).toBe('UNEXPECTED_OPERATIONS');
+  });
+
+  it('still fee-bumps a single-operation transaction', () => {
+    expect(() => feeBump(sponsor, inner, Networks.TESTNET, '200')).not.toThrow();
+  });
+
   it('computes sponsor runway', () => {
     expect(runwayDays(70_000_000n, 10_000_000n)).toBe(7);
     expect(runwayDays(1n, 0n)).toBe(Infinity);

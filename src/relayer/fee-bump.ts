@@ -1,4 +1,18 @@
 import { Keypair, TransactionBuilder, type FeeBumpTransaction, type Transaction } from '@stellar/stellar-sdk';
+import { SponsorshipError } from './allowlist.js';
+
+/**
+ * Refuses any inner transaction that carries more than one operation. The sponsor pays for the whole envelope, so an
+ * extra operation (a transfer or a second call bundled into a sponsored one) would be paid for without being checked.
+ */
+export function assertSingleOperation(inner: Transaction): void {
+  if (inner.operations.length !== 1) {
+    throw new SponsorshipError(
+      'UNEXPECTED_OPERATIONS',
+      `expected exactly one operation, found ${inner.operations.length}; the transaction is not sponsored`,
+    );
+  }
+}
 
 /**
  * Wraps a user-signed inner transaction in a fee bump paid by the sponsor, so users never hold XLM.
@@ -10,6 +24,7 @@ export function feeBump(
   networkPassphrase: string,
   baseFee: string,
 ): FeeBumpTransaction {
+  assertSingleOperation(inner);
   if (BigInt(baseFee) < BigInt(Math.ceil(Number(inner.fee) / Math.max(inner.operations.length, 1)))) {
     throw new Error('fee bump base fee is lower than the inner transaction fee rate');
   }

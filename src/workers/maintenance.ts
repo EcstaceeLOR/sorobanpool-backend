@@ -1,5 +1,6 @@
 import type { PrismaClient } from '../generated/prisma/client.js';
 import { combineQuotes, FxDivergenceError, type FxSourceQuote } from '../fx/fx.js';
+import { runwayDays } from '../relayer/fee-bump.js';
 
 /** Live offers past `validUntil` stop being offered; pools already created from them are unaffected. */
 export async function expireOffers(prisma: Pick<PrismaClient, 'offer'>, now: Date): Promise<number> {
@@ -77,6 +78,49 @@ export async function checkSponsor(chain: { sponsorBalance(): Promise<bigint> },
   const minStroops = BigInt(Math.round(minXlm * 10_000_000));
   const balanceStroops = await chain.sponsorBalance();
   return { balanceStroops, minStroops, low: balanceStroops < minStroops };
+}
+
+/** Runway window and default alert threshold (#100, brief 7.5): days of sponsor fee cover left. */
+export const RUNWAY_WINDOW_DAYS = 7;
+export const DEFAULT_MIN_RUNWAY_DAYS = 7;
+/** Per-transaction fee used to turn sponsored transaction counts into stroops. An estimate until fees are measured. */
+export const TX_FEE_ESTIMATE_STROOPS = 1_000_000n;
+
+export interface RunwayHealth extends SponsorHealth {
+  /** Days the balance covers at the recent average spend; null when there is no recent history to measure. */
+  runwayDays: number | null;
+  minRunwayDays: number;
+}
+
+/** Average daily sponsor spend in stroops over the last `windowDays` days (today included), from `SponsorUsage` counts. */
+export async function averageDailySpend(
+  prisma: Pick<PrismaClient, 'sponsorUsage'>, now: Date, feeStroops = TX_FEE_ESTIMATE_STROOPS, windowDays = RUNWAY_WINDOW_DAYS,
+): Promise<bigint> {
+  const day = (d: Date): string => d.toISOString().slice(0, 10);
+  const from = day(new Date(now.getTime() - (windowDays - 1) * 86_400_000));
+  const agg = await prisma.sponsorUsage.aggregate({ where: { day: { gte: from, lte: day(now) } }, _sum: { count: true } });
+  const txs = BigInt(agg._sum.count ?? 0);
+  return (txs * feeStroops) / BigInt(windowDays);
+}
+
+/**
+ * Alerts when the sponsor balance covers fewer than `minRunwayDays` at the recent average spend. With no recent
+ * sponsored transactions there is no spend rate to measure, so it falls back to the fixed `minXlm` floor.
+ */
+export async function checkSponsorRunway(
+  prisma: Pick<PrismaClient, 'sponsorUsage'>,
+  chain: { sponsorBalance(): Promise<bigint> },
+  now: Date,
+  opts: { minXlm: number; minRunwayDays: number },
+): Promise<RunwayHealth> {
+  const balanceStroops = await chain.sponsorBalance();
+  const minStroops = BigInt(Math.round(opts.minXlm * 10_000_000));
+  const spend = await averageDailySpend(prisma, now);
+  if (spend === 0n) {
+    return { balanceStroops, minStroops, low: balanceStroops < minStroops, runwayDays: null, minRunwayDays: opts.minRunwayDays };
+  }
+  const days = runwayDays(balanceStroops, spend);
+  return { balanceStroops, minStroops, low: days < opts.minRunwayDays, runwayDays: days, minRunwayDays: opts.minRunwayDays };
 }
 
 export interface PoolMismatch {

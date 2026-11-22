@@ -12,7 +12,8 @@ export type TemplateName =
   | 'confirm_pickup'
   | 'settled'
   | 'dispute_update'
-  | 'offer_expiry_warning';
+  | 'offer_expiry_warning'
+  | 'confirm_window_ending';
 
 /** SMS is the primary channel: every rendered message must fit in 160 characters. */
 export const SMS_MAX = 160;
@@ -65,6 +66,10 @@ const T: Record<TemplateName, Record<Lang, string>> = {
   offer_expiry_warning: {
     EN: 'Your offer {product} expires in {hours}h. Renew it in the app to keep receiving orders.',
     PCM: 'Your offer {product} go expire in {hours}h. Renew am for the app make orders still dey come.',
+  },
+  confirm_window_ending: {
+    EN: 'Confirm {product} within {hours}h or it auto-confirms. Open the app to confirm delivery.',
+    PCM: 'Confirm {product} for {hours}h or e go auto-confirm. Open the app make you confirm delivery.',
   },
 };
 

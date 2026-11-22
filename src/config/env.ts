@@ -61,6 +61,7 @@ export const envSchema = z.object({
   METRICS_TOKEN: z.string().min(16).optional(),
   RATE_LIMIT_PER_MIN: z.coerce.number().int().positive().default(300),
   SPONSOR_MIN_XLM: z.coerce.number().positive().default(100),
+  SPONSOR_MIN_RUNWAY_DAYS: z.coerce.number().positive().default(7),
   KEEPER_EMBEDDED: bool.default(false),
   OBJECT_STORE: z.enum(['local', 's3']).default('local'),
   S3_REGION: z.string().default('auto'),
