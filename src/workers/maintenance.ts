@@ -29,6 +29,43 @@ export async function purgeIdempotencyKeys(
   return deleted;
 }
 
+/**
+ * Drops raw chain events older than the retention window (#90). Only events whose pool has reached a final state
+ * (or that belong to no pool) are deleted: a non-final pool must always be rebuildable from its full history.
+ * Events whose pool is unknown are kept as well, and `protected` rows are never considered. Work is limited to
+ * `maxBatches * batchSize` rows per run so a large backlog drains over several maintenance ticks.
+ */
+export async function pruneChainEvents(
+  prisma: Pick<PrismaClient, 'chainEvent' | 'pool'>,
+  now: Date,
+  retentionDays: number,
+  batchSize = 500,
+  maxBatches = 20,
+): Promise<number> {
+  const cutoff = new Date(now.getTime() - retentionDays * 86_400_000);
+  const skipped: string[] = [];
+  let deleted = 0;
+  for (let i = 0; i < maxBatches; i++) {
+    const batch = await prisma.chainEvent.findMany({
+      where: { closedAt: { lt: cutoff }, protected: false, id: { notIn: skipped } },
+      select: { id: true, poolId: true }, orderBy: { closedAt: 'asc' }, take: batchSize,
+    });
+    if (batch.length === 0) break;
+    const poolIds = [...new Set(batch.map((e) => e.poolId).filter((id): id is bigint => id !== null))];
+    const pools = poolIds.length ? await prisma.pool.findMany({ where: { id: { in: poolIds } }, select: { id: true, state: true } }) : [];
+    const states = new Map(pools.map((p) => [p.id, p.state]));
+    const safe: string[] = [];
+    for (const e of batch) {
+      if (e.poolId === null) { safe.push(e.id); continue; } // no pool read model to rebuild
+      if (FINAL_POOL_STATES.includes(states.get(e.poolId) ?? '')) safe.push(e.id);
+      else skipped.push(e.id); // non-final or unknown pool: keep for rebuilds
+    }
+    if (safe.length) deleted += (await prisma.chainEvent.deleteMany({ where: { id: { in: safe } } })).count;
+    if (batch.length < batchSize) break;
+  }
+  return deleted;
+}
+
 export interface SponsorHealth {
   balanceStroops: bigint;
   minStroops: bigint;
@@ -52,7 +89,8 @@ export interface PoolMismatch {
 /** Soroban unit enum variants decode as `['Open']` through scValToNative; accept a bare string as well. */
 export const chainState = (v: unknown): string => String(Array.isArray(v) ? v[0] : v);
 
-const FINAL_STATES = ['Settled', 'Expired', 'Failed', 'Cancelled'];
+/** A pool in one of these states no longer needs its raw events for a read-model rebuild (#90). */
+export const FINAL_POOL_STATES: string[] = ['Settled', 'Expired', 'Failed', 'Cancelled'];
 
 /**
  * Compares the indexed read model with the contracts for pools that are still live. The chain is the source of truth,
@@ -64,7 +102,7 @@ export async function reconcilePools(
   poolArg: (id: bigint) => unknown[],
   limit = 50,
 ): Promise<PoolMismatch[]> {
-  const rows = await prisma.pool.findMany({ where: { state: { notIn: FINAL_STATES } }, orderBy: { id: 'asc' }, take: limit });
+  const rows = await prisma.pool.findMany({ where: { state: { notIn: FINAL_POOL_STATES } }, orderBy: { id: 'asc' }, take: limit });
   const out: PoolMismatch[] = [];
   for (const p of rows) {
     const c = await (chain as { view: (n: string, f: string, a: unknown[]) => Promise<Record<string, unknown>> }).view('group_buy', 'pool', poolArg(p.id));

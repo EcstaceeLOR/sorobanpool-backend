@@ -2,7 +2,7 @@ import { PrismaPg } from '@prisma/adapter-pg';
 import { Prisma, PrismaClient } from '../generated/prisma/client.js';
 import { formatUsdc, toStroops } from '../common/money.js';
 import { ceilingPrice, type Tier } from '../pools/pricing.js';
-import type { RawEvent } from '../indexer/decode.js';
+import { bigintOrUndefined, decodeEvent, eventPoolId, type RawEvent } from '../indexer/decode.js';
 import type { CursorStore, EventSink } from '../indexer/indexer.service.js';
 import type { ActivityEventRow, BondRow, CommitmentRow, DisputeRow, PoolRow, PoolState, ReadStore, ReputationTierRow } from '../indexer/read-model.js';
 import type { OtpRecord, OtpStore } from '../auth/otp.service.js';
@@ -89,9 +89,23 @@ export class PrismaEventSink implements EventSink {
   /** Idempotent: re-polling the same ledgers never duplicates or resets a processed event. */
   async saveRaw(raw: RawEvent): Promise<void> {
     const topic = raw.topic[1] ?? '';
+    const ev = decodeEvent(raw);
+    let poolId = ev ? eventPoolId(ev) : undefined;
+    if (ev?.contract === 'disputes' && poolId === undefined) {
+      const disputeId = bigintOrUndefined(ev.key);
+      const dispute = disputeId === undefined
+        ? undefined
+        : await this.db.dispute.findUnique({ where: { id: disputeId }, select: { poolId: true } });
+      poolId = dispute?.poolId;
+    }
+    // An event that can affect a pool but whose pool we cannot identify must never be pruned (#90).
+    const protectedEvent = poolId === undefined && (!ev || ev.contract === 'group_buy' || ev.contract === 'disputes');
     await this.db.chainEvent.upsert({
       where: { id: raw.id },
-      create: { id: raw.id, ledger: raw.ledger, contract: raw.contractId, topic, payload: raw as unknown as Prisma.InputJsonValue },
+      create: {
+        id: raw.id, ledger: raw.ledger, contract: raw.contractId, topic,
+        payload: raw as unknown as Prisma.InputJsonValue, closedAt: new Date(raw.ledgerClosedAt), poolId, protected: protectedEvent,
+      },
       update: {},
     });
   }
@@ -205,20 +219,23 @@ export class PrismaReadStore implements ReadStore {
     const o = (d.outcome ?? {}) as { reasoningHash?: string };
     return {
       id, poolId: d.poolId, opener: d.openerAddress, claimedAmount: fromDec(d.claimedAmount), openedAt: d.openedAt,
-      state: d.state as DisputeRow['state'], arbiter: d.arbiterAddress ?? undefined, reasoningHash: o.reasoningHash,
+      state: d.state as DisputeRow['state'], evidenceCount: d.evidenceCount, closedAt: d.closedAt,
+      arbiter: d.arbiterAddress ?? undefined, reasoningHash: o.reasoningHash,
     };
   }
 
   async saveDispute(r: DisputeRow): Promise<void> {
     const sla = 5 * 24 * 3600_000; // default arbitration SLA; the keeper reads the live parameter from config
     const data = {
-      state: r.state, arbiterAddress: r.arbiter ?? null, outcome: r.reasoningHash ? { reasoningHash: r.reasoningHash } : Prisma.JsonNull,
+      state: r.state, evidenceCount: r.evidenceCount, closedAt: r.closedAt,
+      arbiterAddress: r.arbiter ?? null, outcome: r.reasoningHash ? { reasoningHash: r.reasoningHash } : Prisma.JsonNull,
     };
     await this.db.dispute.upsert({
       where: { id: r.id },
       create: {
         id: r.id, poolId: r.poolId, openerAddress: r.opener, reason: 'UNKNOWN', claimedUnits: 0,
-        claimedAmount: toDec(r.claimedAmount), openedAt: r.openedAt, slaDueAt: new Date(r.openedAt.getTime() + sla), ...data,
+        claimedAmount: toDec(r.claimedAmount), openedAt: r.openedAt, slaDueAt: new Date(r.openedAt.getTime() + sla),
+        ...data,
       },
       update: data,
     });
@@ -226,14 +243,21 @@ export class PrismaReadStore implements ReadStore {
 
   async bond(supplier: string): Promise<BondRow | undefined> {
     const b = await this.db.bond.findUnique({ where: { supplierAddress: supplier } });
-    return b ? { supplier, total: fromDec(b.total) } : undefined;
+    return b ? {
+      supplier, total: fromDec(b.total), reserved: fromDec(b.reserved),
+      slashRequested: fromDec(b.slashRequested), slashActual: fromDec(b.slashActual), lastEventLedger: b.lastEventLedger,
+    } : undefined;
   }
 
   async saveBond(r: BondRow): Promise<void> {
+    const data = {
+      total: toDec(r.total), reserved: toDec(r.reserved),
+      slashRequested: toDec(r.slashRequested), slashActual: toDec(r.slashActual), lastEventLedger: r.lastEventLedger,
+    };
     await this.db.bond.upsert({
       where: { supplierAddress: r.supplier },
-      create: { supplierAddress: r.supplier, total: toDec(r.total), reserved: '0' },
-      update: { total: toDec(r.total) },
+      create: { supplierAddress: r.supplier, ...data },
+      update: data,
     });
   }
 

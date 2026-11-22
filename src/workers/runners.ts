@@ -13,14 +13,21 @@ import { Metrics } from '../observability/metrics.js';
 import type { Services } from '../app/services.js';
 import { combineQuotes } from '../fx/fx.js';
 import { dispatchDue, NotificationProducer, queueDeadlineReminders } from '../notifications/dispatcher.js';
-import { checkSponsor, expireOffers, expireStaleAnchorTransfers, MismatchTracker, purgeIdempotencyKeys, reconcilePools, refreshFx } from './maintenance.js';
+import {
+  checkSponsor, expireOffers, expireStaleAnchorTransfers, FINAL_POOL_STATES, MismatchTracker,
+  pruneChainEvents, purgeIdempotencyKeys, reconcilePools, refreshFx,
+} from './maintenance.js';
 
 /**
  * Soroban RPC adapter for the indexer. The Indexer treats `endLedger` as inclusive, but the RPC's `endLedger`
  * is EXCLUSIVE (verified live: start=N,end=N returns nothing; start=N,end=N+1 returns ledger N). Passing it
  * through unchanged silently loses every event in the newest ledger of each polling window, so it is shifted by one.
  */
-export function rpcPort(server: Pick<rpc.Server, 'getLatestLedger' | 'getHealth' | 'getEvents'>): RpcPort {
+export function rpcPort(
+  server: Pick<rpc.Server, 'getLatestLedger' | 'getHealth' | 'getEvents'>,
+  pageSize = 200,
+  maxPages = 50,
+): RpcPort {
   return {
     latestLedger: async () => (await server.getLatestLedger()).sequence,
     oldestLedger: async () => (await server.getHealth()).oldestLedger,
@@ -30,18 +37,20 @@ export function rpcPort(server: Pick<rpc.Server, 'getLatestLedger' | 'getHealth'
       for (let i = 0; i < contractIds.length; i += 5) filters.push({ type: 'contract', contractIds: contractIds.slice(i, i + 5) });
       const out: RawEvent[] = [];
       let cursor: string | undefined;
-      for (let page = 0; page < 50; page++) {
-        const res = await server.getEvents(cursor ? { cursor, filters, limit: 200 } : { startLedger, endLedger: endLedger + 1, filters, limit: 200 });
+      for (let page = 0; page < maxPages; page++) {
+        const res = await server.getEvents(cursor ? { cursor, filters, limit: pageSize } : { startLedger, endLedger: endLedger + 1, filters, limit: pageSize });
         for (const e of res.events) {
           out.push({
             id: e.id, ledger: e.ledger, ledgerClosedAt: e.ledgerClosedAt, contractId: String(e.contractId ?? ''),
             topic: e.topic.map((t) => t.toXDR('base64')), value: e.value.toXDR('base64'),
           });
         }
-        if (res.events.length < 200) break;
+        if (res.events.length < pageSize) return out;
+        if (!res.cursor) break;
         cursor = res.cursor;
       }
-      return out;
+      // Never advance the cursor past a range we did not drain: fail the tick instead of losing events (#87).
+      throw new Error(`getEvents page limit ${maxPages}x${pageSize} reached for ${startLedger}..${endLedger}; narrow INDEXER_BATCH_LEDGERS`);
     },
   };
 }
@@ -145,12 +154,22 @@ export function startIndexer(s: Services, server: rpc.Server, intervalMs = 5000,
   const ids = CONTRACT_NAMES.map((n) => s.deployments.contracts[n].id);
   const producer = new NotificationProducer(s.prisma, async () => combineQuotes(await s.fx.quotes(), s.now()).rate, s.now);
   const indexer = new Indexer(
-    rpcPort(server), new PrismaCursorStore(s.prisma), new PrismaEventSink(s.prisma), new Projector(new PrismaReadStore(s.prisma)), ids, s.env.INDEXER_START_LEDGER ?? (s.deployments.deployedAtLedger ? { from: s.deployments.deployedAtLedger } : 'oldest'), 1000,
+    rpcPort(server, s.env.INDEXER_EVENT_PAGE_SIZE, s.env.INDEXER_EVENT_MAX_PAGES),
+    new PrismaCursorStore(s.prisma), new PrismaEventSink(s.prisma), new Projector(new PrismaReadStore(s.prisma)), ids,
+    s.env.INDEXER_START_LEDGER ?? (s.deployments.deployedAtLedger ? { from: s.deployments.deployedAtLedger } : 'oldest'),
+    s.env.INDEXER_BATCH_LEDGERS,
     async (ev) => {
       for (const id of await affectedPools(s, ev)) s.previewCache.evictPool(id);
       await producer.onEvent(ev);
     },
     s.env.INDEXER_LAG_ALERT_LEDGERS, metrics,
+    {
+      retries: s.env.INDEXER_RETRIES,
+      backoffBaseMs: s.env.INDEXER_RETRY_BASE_MS,
+      backoffMaxMs: s.env.INDEXER_RETRY_MAX_MS,
+      backoffJitter: s.env.INDEXER_RETRY_JITTER,
+      progressEveryLedgers: s.env.INDEXER_PROGRESS_LOG_LEDGERS,
+    },
   );
   const runner = every('indexer', intervalMs, async () => {
     await indexer.tick();
@@ -159,7 +178,7 @@ export function startIndexer(s: Services, server: rpc.Server, intervalMs = 5000,
   return { runner, indexer };
 }
 
-const FINAL: PoolState[] = ['Settled', 'Expired', 'Failed', 'Cancelled'];
+const FINAL: PoolState[] = FINAL_POOL_STATES as PoolState[];
 const secs = (d: Date | null) => (d ? Math.floor(d.getTime() / 1000) : 0);
 
 /** Contract parameters the keeper needs, read from `config.get_params` (u64 fields arrive as bigint). */
@@ -276,6 +295,8 @@ export function startMaintenance(s: Services, intervalMs = 300_000): Runner {
     if (reminded) console.log(`[maintenance] queued ${reminded} deadline reminder(s)`);
     const purged = await purgeIdempotencyKeys(s.prisma, s.now(), s.env.IDEMPOTENCY_RETENTION_DAYS);
     if (purged) console.log(`[maintenance] deleted ${purged} expired idempotency key(s)`);
+    const pruned = await pruneChainEvents(s.prisma, s.now(), s.env.CHAIN_EVENT_RETENTION_DAYS);
+    if (pruned) console.log(`[maintenance] pruned ${pruned} expired chain event(s)`);
     const expiredTransfers = await expireStaleAnchorTransfers(s.prisma, s.now(), s.env.ANCHOR_TRANSFER_EXPIRY_MINUTES);
     if (expiredTransfers.expired) console.log(`[maintenance] expired ${expiredTransfers.expired} anchor transfer(s)`);
     const bad = tracker.persistent(await reconcilePools(s.prisma, s.chain as never, A.poolOnly));

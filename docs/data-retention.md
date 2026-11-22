@@ -32,7 +32,8 @@ every table is covered.
 | Pending pools | `PendingPool` | organizer wallet, hub address and contact | Until the pool is indexed; delete unclaimed rows 7 days after `fillDeadline` | TBD | **Gap** |
 | Offers | `Offer` | supplier id (business data, not personal) | While live, then as long as pools reference them | n/a | `expireOffers` (maintenance) marks them `EXPIRED`; nothing deletes them |
 | FX quotes | `FxQuote` | none | 90 days (one row a minute) | n/a | **Gap**: grows by ~1,440 rows a day |
-| Indexed chain data | `ChainEvent`, `IndexerCursor`, `Pool`, `Commitment`, `Dispute`, `Bond` | wallet addresses (public on-chain) | Kept: the read model is rebuilt from these | n/a | Not applicable |
+| Raw chain events | `ChainEvent` | wallet addresses (public on-chain) | 180 days (`CHAIN_EVENT_RETENTION_DAYS`) for final pools and contract-wide events; kept forever for non-final pools and unknown ownership | n/a | `pruneChainEvents` (maintenance), bounded batches; policy in `docs/architecture.md` (#90) |
+| Indexed read model | `IndexerCursor`, `Pool`, `Commitment`, `Dispute`, `Bond` | wallet addresses (public on-chain) | Kept: current state, rebuilt from chain events | n/a | Not applicable |
 
 Rate-limit counters (`src/app/rate-limit.ts`) live in process memory, reset every window, and are not persisted.
 

@@ -118,10 +118,17 @@ export class DisputesController {
   async myBond(@CurrentUser() u: AuthedUser) {
     const wallet = await walletOf(this.s, u.id);
     const b = await this.s.prisma.bond.findUnique({ where: { supplierAddress: wallet } });
-    return { total: b?.total.toString() ?? '0', reserved: b?.reserved.toString() ?? '0' };
+    return {
+      total: b?.total.toString() ?? '0', reserved: b?.reserved.toString() ?? '0',
+      slashRequested: b?.slashRequested.toString() ?? '0', slashActual: b?.slashActual.toString() ?? '0',
+    };
   }
 }
 
-function view(d: { id: bigint; poolId: bigint; openerAddress: string; state: string; claimedAmount: { toString(): string }; openedAt: Date; slaDueAt: Date; arbiterAddress: string | null }) {
-  return { id: d.id.toString(), poolId: d.poolId.toString(), opener: d.openerAddress, state: d.state, claimedAmount: d.claimedAmount.toString(), openedAt: d.openedAt, slaDueAt: d.slaDueAt, arbiter: d.arbiterAddress };
+function view(d: { id: bigint; poolId: bigint; openerAddress: string; state: string; claimedAmount: { toString(): string }; openedAt: Date; slaDueAt: Date; arbiterAddress: string | null; evidenceCount: number; closedAt: Date | null }) {
+  return {
+    id: d.id.toString(), poolId: d.poolId.toString(), opener: d.openerAddress, state: d.state,
+    claimedAmount: d.claimedAmount.toString(), openedAt: d.openedAt, slaDueAt: d.slaDueAt,
+    evidenceCount: d.evidenceCount, closedAt: d.closedAt, arbiter: d.arbiterAddress,
+  };
 }

@@ -52,6 +52,10 @@ export interface DisputeRow {
   claimedAmount: bigint;
   openedAt: Date;
   state: 'OPEN' | 'RESOLVED' | 'TIMED_OUT';
+  /** Number of `d_evid` events seen; the arbiter views need this without another DB query. */
+  evidenceCount: number;
+  /** When RESOLVED/TIMED_OUT stopped the SLA clock; null while OPEN. */
+  closedAt: Date | null;
   arbiter?: string;
   reasoningHash?: string;
 }
@@ -59,6 +63,11 @@ export interface DisputeRow {
 export interface BondRow {
   supplier: string;
   total: bigint;
+  reserved: bigint;
+  /** Cumulative slash amounts from `slashed` events: what was asked for and what the bond could cover. */
+  slashRequested: bigint;
+  slashActual: bigint;
+  lastEventLedger: number;
 }
 
 export interface ReputationTierRow {

@@ -33,3 +33,14 @@ export function decodeEvent(raw: RawEvent): DecodedEvent | null {
   if (typeof contract !== 'string' || typeof event !== 'string') return null;
   return { id: raw.id, ledger: raw.ledger, closedAt: new Date(raw.ledgerClosedAt), contractId: raw.contractId, contract, event, key, data: native(raw.value) };
 }
+
+export const bigintOrUndefined = (v: unknown): bigint | undefined => {
+  try { return BigInt(v as bigint | number | string); } catch { return undefined; }
+};
+
+/** Pool whose read model this event can change. Contract-wide events have no pool and return undefined. */
+export function eventPoolId(ev: DecodedEvent): bigint | undefined {
+  if (ev.contract === 'group_buy') return bigintOrUndefined(ev.key);
+  if (ev.contract === 'disputes' && ev.event === 'd_open') return bigintOrUndefined(Array.isArray(ev.data) ? ev.data[0] : undefined);
+  return undefined;
+}

@@ -3,7 +3,7 @@ import { nativeToScVal, xdr, Address, Keypair } from '@stellar/stellar-sdk';
 import { decodeEvent, type RawEvent } from './decode.js';
 import { HANDLERS, IGNORED_EVENTS, Projector } from './projector.js';
 import { MemoryReadStore } from './read-model.js';
-import { Indexer, type CursorStore, type EventSink, type RpcPort, type StartLedger } from './indexer.service.js';
+import { backoffDelay, Indexer, type CursorStore, type EventSink, type IndexerOptions, type RpcPort, type StartLedger } from './indexer.service.js';
 import { Metrics } from '../observability/metrics.js';
 
 const events: { contract: string; event: string }[] = JSON.parse(
@@ -118,6 +118,37 @@ describe('Projector', () => {
     await expect(p.apply(decodeEvent(raw('group_buy', 'accepted', u64(77n), a(supplier)))!)).rejects.toThrow(/unknown pool/);
   });
 
+  it('counts dispute evidence and closes the SLA timer on timeout (#88)', async () => {
+    const { store, apply } = await fullLifecycle();
+    await apply(raw('disputes', 'd_open', u64(9n), tup(u64(1n), a(m1), i128(80n))));
+    const dispute = () => store.disputes.get(9n)!;
+    expect(dispute().evidenceCount).toBe(0);
+    await apply(raw('disputes', 'd_evid', u64(9n), tup(a(m1), nativeToScVal(bytes32(1)))));
+    await apply(raw('disputes', 'd_evid', u64(9n), tup(a(m2), nativeToScVal(bytes32(2)))));
+    expect(dispute().evidenceCount).toBe(2);
+    expect(dispute().closedAt).toBeNull();
+    const timeout = raw('disputes', 'd_timeout', u64(9n), xdr.ScVal.scvBool(true));
+    await apply(timeout);
+    expect(dispute().state).toBe('TIMED_OUT');
+    expect(dispute().closedAt).toEqual(decodeEvent(timeout)!.closedAt);
+    expect(store.pools.get(1n)!.frozenAmount).toBe(0n);
+  });
+
+  it('projects bond deposits, partial withdrawals and slashes with requested and actual amounts (#89)', async () => {
+    const store = new MemoryReadStore();
+    const p = new Projector(store);
+    const apply = (r: RawEvent) => p.apply(decodeEvent(r)!);
+    await apply(raw('bond', 'deposit', a(supplier), i128(500n), 1));
+    await apply(raw('bond', 'deposit', a(supplier), i128(100n), 2));
+    await apply(raw('bond', 'withdraw', a(supplier), i128(150n), 3));
+    expect(store.bonds.get(supplier)).toMatchObject({ total: 450n, reserved: 0n, lastEventLedger: 3 });
+    await apply(raw('bond', 'slashed', a(supplier), tup(i128(300n), i128(200n)), 4));
+    expect(store.bonds.get(supplier)).toMatchObject({ total: 250n, slashRequested: 300n, slashActual: 200n });
+    // A single amount is capped by the remaining bond, so requested and actual can differ.
+    await apply(raw('bond', 'slashed', a(supplier), i128(500n), 5));
+    expect(store.bonds.get(supplier)).toMatchObject({ total: 0n, slashRequested: 800n, slashActual: 450n, lastEventLedger: 5 });
+  });
+
   it('projects rep.rep_upd', async () => {
     const store = new MemoryReadStore();
     const p = new Projector(store);
@@ -133,7 +164,7 @@ describe('Projector', () => {
 });
 
 describe('Indexer', () => {
-  function harness(opts: { latest: number; oldest?: number; events?: RawEvent[]; cursor?: number; start?: StartLedger; metrics?: Metrics; lagAlert?: number }) {
+  function harness(opts: { latest: number; oldest?: number; events?: RawEvent[]; cursor?: number; start?: StartLedger; metrics?: Metrics; lagAlert?: number; options?: IndexerOptions }) {
     let cursor = opts.cursor;
     const saved: RawEvent[] = [];
     const rpc: RpcPort = {
@@ -144,7 +175,7 @@ describe('Indexer', () => {
     const cur: CursorStore = { get: async () => cursor, set: async (l) => void (cursor = l) };
     const sink: EventSink = { saveRaw: async (r) => void saved.push(r) };
     const store = new MemoryReadStore();
-    const idx = new Indexer(rpc, cur, sink, new Projector(store), ['Cx'], opts.start ?? 1, 50, undefined, opts.lagAlert, opts.metrics);
+    const idx = new Indexer(rpc, cur, sink, new Projector(store), ['Cx'], opts.start ?? 1, 50, undefined, opts.lagAlert, opts.metrics, opts.options);
     return { idx, saved, store, cursor: () => cursor };
   }
 
@@ -210,4 +241,67 @@ describe('Indexer', () => {
   });
 
   function organizer() { return addr(); }
+
+describe('bounded polling, backoff and progress (#87)', () => {
+  it('retries errors then data with an exponential delay sequence capped at the maximum', async () => {
+    const delays: number[] = [];
+    let calls = 0;
+    const rpc: RpcPort = {
+      latestLedger: async () => 20,
+      oldestLedger: async () => 1,
+      getEvents: async () => {
+        if (++calls <= 3) throw new Error(`rpc ${calls} down`);
+        return [];
+      },
+    };
+    let advanced: number | undefined;
+    const cur: CursorStore = { get: async () => 0, set: async (l) => void (advanced = l) };
+    const sink: EventSink = { saveRaw: async () => {} };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const idx = new Indexer(rpc, cur, sink, new Projector(new MemoryReadStore()), ['Cx'], 1, 10, undefined, undefined, undefined, {
+      retries: 4, backoffBaseMs: 100, backoffMaxMs: 250, backoffJitter: 0,
+      sleep: async (ms: number) => { delays.push(ms); },
+    });
+    expect(await idx.tick()).toEqual({ processed: 0 });
+    expect(delays).toEqual([100, 200, 250]);
+    expect(calls).toBe(4);
+    expect(advanced).toBe(10);
+    warn.mockRestore();
+  });
+
+  it('gives up after the retry budget without advancing the cursor', async () => {
+    const rpc: RpcPort = {
+      latestLedger: async () => 20, oldestLedger: async () => 1,
+      getEvents: async () => { throw new Error('rpc down'); },
+    };
+    let advanced = false;
+    const cur: CursorStore = { get: async () => 0, set: async () => void (advanced = true) };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const idx = new Indexer(rpc, cur, { saveRaw: async () => {} }, new Projector(new MemoryReadStore()), ['Cx'], 1, 10, undefined, undefined, undefined, {
+      retries: 2, backoffBaseMs: 10, backoffMaxMs: 10, sleep: async () => {},
+    });
+    await expect(idx.tick()).rejects.toThrow('rpc down');
+    expect(advanced).toBe(false);
+    warn.mockRestore();
+  });
+
+  it('jitters symmetrically but never above the configured maximum', () => {
+    expect(backoffDelay(0, 100, 1000, 0.5, () => 0)).toBe(50);
+    expect(backoffDelay(0, 100, 1000, 0.5, () => 0.5)).toBe(100);
+    expect(backoffDelay(1, 100, 1000, 0.5, () => 1)).toBe(300);
+    expect(backoffDelay(10, 100, 1000, 0.5, () => 1)).toBe(1000);
+  });
+
+  it('logs progress only when a batch crosses an N-ledger boundary', async () => {
+    const lines: string[] = [];
+    const opts: IndexerOptions = { progressEveryLedgers: 100, log: (line) => lines.push(line) };
+    const crossing = harness({ latest: 1100, cursor: 950, options: opts });
+    await crossing.idx.tick();
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/progress 951\.\.1000 processed=0 lag=100/);
+    const quiet = harness({ latest: 1010, cursor: 1000, options: opts });
+    await quiet.idx.tick();
+    expect(lines).toHaveLength(1);
+  });
+});
 });
