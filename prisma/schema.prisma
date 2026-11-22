@@ -380,6 +380,15 @@ model IdempotencyKey {
   createdAt DateTime @default(now())
 }
 
+/// One confirmation-window reminder per member or organizer per pool (#95). The composite key stops a second send.
+model ConfirmationReminder {
+  poolId BigInt
+  userId String
+  sentAt DateTime @default(now())
+
+  @@id([poolId, userId])
+}
+
 /// Daily fee-sponsorship counters per user (relayer caps).
 model SponsorUsage {
   userId String

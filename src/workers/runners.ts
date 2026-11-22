@@ -12,7 +12,7 @@ import type { PrismaClient } from '../generated/prisma/client.js';
 import { Metrics } from '../observability/metrics.js';
 import type { Services } from '../app/services.js';
 import { combineQuotes } from '../fx/fx.js';
-import { dispatchDue, NotificationProducer, queueDeadlineReminders } from '../notifications/dispatcher.js';
+import { dispatchDue, NotificationProducer, queueConfirmationReminders, queueDeadlineReminders } from '../notifications/dispatcher.js';
 import {
   checkSponsorRunway, expireOffers, expireStaleAnchorTransfers, FINAL_POOL_STATES, MismatchTracker,
   pruneChainEvents, purgeIdempotencyKeys, reconcilePools, refreshFx,
@@ -293,6 +293,14 @@ export function startMaintenance(s: Services, intervalMs = 300_000): Runner {
     if (n) console.log(`[maintenance] expired ${n} offer(s)`);
     const reminded = await queueDeadlineReminders(s.prisma, s.now());
     if (reminded) console.log(`[maintenance] queued ${reminded} deadline reminder(s)`);
+    const windows = await keeperParams(s).catch((e: unknown) => {
+      console.error(`[maintenance] confirmation reminders skipped: ${(e as Error).message}`);
+      return undefined;
+    });
+    if (windows) {
+      const confirmed = await queueConfirmationReminders(s.prisma, s.now(), { standardSecs: windows.confirmWindowSecs, perishableSecs: windows.perishableConfirmWindowSecs });
+      if (confirmed) console.log(`[maintenance] queued ${confirmed} confirmation reminder(s)`);
+    }
     const purged = await purgeIdempotencyKeys(s.prisma, s.now(), s.env.IDEMPOTENCY_RETENTION_DAYS);
     if (purged) console.log(`[maintenance] deleted ${purged} expired idempotency key(s)`);
     const pruned = await pruneChainEvents(s.prisma, s.now(), s.env.CHAIN_EVENT_RETENTION_DAYS);
