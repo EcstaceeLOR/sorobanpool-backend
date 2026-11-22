@@ -4,6 +4,7 @@ import { decodeEvent, type RawEvent } from './decode.js';
 import { HANDLERS, IGNORED_EVENTS, Projector } from './projector.js';
 import { MemoryReadStore } from './read-model.js';
 import { Indexer, type CursorStore, type EventSink, type RpcPort, type StartLedger } from './indexer.service.js';
+import { Metrics } from '../observability/metrics.js';
 
 const events: { contract: string; event: string }[] = JSON.parse(
   readFileSync(new URL('../chain/artifacts/events.json', import.meta.url), 'utf8'),
@@ -119,7 +120,7 @@ describe('Projector', () => {
 });
 
 describe('Indexer', () => {
-  function harness(opts: { latest: number; oldest?: number; events?: RawEvent[]; cursor?: number; start?: StartLedger }) {
+  function harness(opts: { latest: number; oldest?: number; events?: RawEvent[]; cursor?: number; start?: StartLedger; metrics?: Metrics; lagAlert?: number }) {
     let cursor = opts.cursor;
     const saved: RawEvent[] = [];
     const rpc: RpcPort = {
@@ -130,7 +131,7 @@ describe('Indexer', () => {
     const cur: CursorStore = { get: async () => cursor, set: async (l) => void (cursor = l) };
     const sink: EventSink = { saveRaw: async (r) => void saved.push(r) };
     const store = new MemoryReadStore();
-    const idx = new Indexer(rpc, cur, sink, new Projector(store), ['Cx'], opts.start ?? 1, 50);
+    const idx = new Indexer(rpc, cur, sink, new Projector(store), ['Cx'], opts.start ?? 1, 50, undefined, opts.lagAlert, opts.metrics);
     return { idx, saved, store, cursor: () => cursor };
   }
 
@@ -156,6 +157,15 @@ describe('Indexer', () => {
     const behind = harness({ latest: 500, cursor: 100, oldest: 300 });
     await expect(behind.idx.tick()).rejects.toThrow(/retention/);
     expect(behind.idx.shouldAlert).toBe(true);
+  });
+
+  it('honours the configured lag threshold and exports the gauge (#85)', async () => {
+    const m = new Metrics();
+    const h = harness({ latest: 120, cursor: 49, metrics: m, lagAlert: 10 });
+    await h.idx.tick(); // batch of 50: 49 -> 99, so the lag is 21 ledgers
+    expect(h.idx.metrics.lag).toBe(21);
+    expect(h.idx.shouldAlert).toBe(true); // above the configured limit of 10
+    expect(m.render()).toContain('indexer_lag_ledgers 21');
   });
 
   it('a fresh install with no explicit start begins just inside the retention window', async () => {

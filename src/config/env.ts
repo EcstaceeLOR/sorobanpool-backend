@@ -2,6 +2,9 @@ import { z } from 'zod';
 
 const bool = z.enum(['true', 'false']).transform((v) => v === 'true');
 
+/** Default for the indexer lag alert and the degraded /health signal (#85). */
+export const DEFAULT_INDEXER_LAG_ALERT_LEDGERS = 20;
+
 export const envSchema = z.object({
   ROLE: z.enum(['api', 'worker', 'indexer']).default('api'),
   PORT: z.coerce.number().int().default(3000),
@@ -56,6 +59,8 @@ export const envSchema = z.object({
   /** registry.attest calls allowed per UTC day (brief 7.8 attestor daily cap); alerts at 80%. */
   ATTESTOR_DAILY_CAP: z.coerce.number().int().positive().default(500),
   INDEXER_START_LEDGER: z.coerce.number().int().positive().optional(),
+  /** Ledgers behind the RPC tip at which the indexer alert fires and /health reports `indexer: degraded` (#85). */
+  INDEXER_LAG_ALERT_LEDGERS: z.coerce.number().int().positive().default(DEFAULT_INDEXER_LAG_ALERT_LEDGERS),
   /** Max JSON request body (body-parser syntax, e.g. "100kb"); larger bodies get a 413 (#171). */
   JSON_BODY_LIMIT: z.string().min(1).default('100kb'),
   /** Max raw upload body for media and evidence (image/*, video/mp4, application/pdf) (#171). */

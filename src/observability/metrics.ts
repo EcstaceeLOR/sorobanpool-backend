@@ -2,6 +2,7 @@ import { type CallHandler, Controller, Get, Headers, Inject, Injectable, type Ex
 import type { Observable } from 'rxjs';
 import { Public } from '../app/http.js';
 import { SERVICES, type Services } from '../app/services.js';
+import { indexerSignal, readinessDeps } from '../health/health.controller.js';
 
 const BUCKETS = [0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10];
 const esc = (v: string) => v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
@@ -100,10 +101,13 @@ export class MetricsController {
   async scrape(@Headers('authorization') auth?: string): Promise<string> {
     const token = this.s.env.METRICS_TOKEN;
     if (token ? auth !== `Bearer ${token}` : this.s.env.NODE_ENV === 'production') throw new UnauthorizedException('metrics token required');
-    const [pending, failed] = await Promise.all([
+    const [pending, failed, indexer] = await Promise.all([
       this.s.prisma.notification.count({ where: { status: 'PENDING' } }),
       this.s.prisma.notification.count({ where: { status: 'FAILED' } }),
+      indexerSignal(readinessDeps(this.s), this.s.env.INDEXER_LAG_ALERT_LEDGERS),
     ]);
+    // Derived from the shared cursor at scrape time, so the gauge works when the indexer runs as a separate role.
+    this.m.setGauge('indexer_lag_ledgers', {}, indexer.lag ?? 0);
     return this.m.render({ sp_notifications_pending: pending, sp_notifications_failed: failed });
   }
 }

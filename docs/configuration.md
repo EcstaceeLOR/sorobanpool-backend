@@ -60,8 +60,10 @@ variable must be set for every role even if that role does not read it.
 | `FX_STATIC` | `1500,1505` | no | all | Comma-separated NGN-per-USD rates for the static FX provider (testnet/dev). |
 | `ATTESTOR_DAILY_CAP` | `500` | no | all | registry.attest calls allowed per UTC day; alerts at 80%. |
 | `INDEXER_START_LEDGER` | optional | no | indexer | First ledger for a fresh indexer; unset starts near the oldest retained ledger (runbook: indexer-backfill). |
+| `INDEXER_LAG_ALERT_LEDGERS` | `20` | no | api,indexer | Ledgers behind the RPC tip at which indexer_lag_ledgers is degraded in /health and the alert fires (default 20). |
 | `JSON_BODY_LIMIT` | `100kb` | no | api | Max JSON request body (body-parser syntax, e.g. 100kb); larger bodies get a 413. |
 | `UPLOAD_BODY_LIMIT` | `16mb` | no | api | Max raw upload body for media and evidence (image/*, video/mp4, application/pdf); larger bodies get a 413. |
 | `COMPRESSION_THRESHOLD_BYTES` | `1024` | no | api | JSON GET responses at or above this size are compressed (brotli, else gzip). |
 | `IDEMPOTENCY_RETENTION_DAYS` | `7` | no | worker | The maintenance job deletes idempotency keys older than this many days. |
 | `ADMIN_ACTION_EXPIRY_MINUTES` | `30` | no | api | Minutes before a pending sensitive admin action expires (1–10,080; default 30). |
+| `ANCHOR_TRANSFER_EXPIRY_MINUTES` | `1440` | no | worker | Minutes before a pending anchor transfer is marked as expired (default 1,440). |
