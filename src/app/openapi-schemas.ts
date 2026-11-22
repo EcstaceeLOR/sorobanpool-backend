@@ -67,8 +67,13 @@ export const API_SCHEMAS: Record<string, JsonSchema> = {
       unitLabel: { type: ['string', 'null'] },
       currentUnitPriceNaira: { type: ['string', 'null'] },
       hub: { type: 'string' },
+      members: { type: 'integer' },
+      category: { type: ['string', 'null'] },
+      deliveryState: { type: ['string', 'null'] },
+      deliveryLga: { type: ['string', 'null'] },
+      cluster: { type: ['string', 'null'] },
     },
-    required: ['id', 'state', 'totalUnits', 'moq', 'progressPct'],
+    required: ['id', 'state', 'totalUnits', 'moq', 'progressPct', 'members', 'category', 'deliveryState', 'deliveryLga', 'cluster'],
   },
   PoolQuote: {
     type: 'object',
@@ -81,7 +86,11 @@ export const API_SCHEMAS: Record<string, JsonSchema> = {
       expectedRefundIfClosedNowUsdc: { type: 'string' },
       nextBreak: {
         type: ['object', 'null'],
-        properties: { unitsToGo: { type: 'integer' }, unitPriceUsdc: { type: 'string' } },
+        properties: {
+          minUnits: { type: 'integer', description: 'Pool size at which this price break starts' },
+          unitsToGo: { type: 'integer' },
+          unitPriceUsdc: { type: 'string' },
+        },
       },
       note: { type: 'string' },
     },

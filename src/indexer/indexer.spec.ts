@@ -117,6 +117,19 @@ describe('Projector', () => {
     const p = new Projector(new MemoryReadStore());
     await expect(p.apply(decodeEvent(raw('group_buy', 'accepted', u64(77n), a(supplier)))!)).rejects.toThrow(/unknown pool/);
   });
+
+  it('projects rep.rep_upd', async () => {
+    const store = new MemoryReadStore();
+    const p = new Projector(store);
+    const apply = async (r: RawEvent) => p.apply(decodeEvent(r)!);
+    const subject = addr();
+    await apply(raw('rep', 'rep_upd', a(subject), tup(xdr.ScVal.scvSymbol('trader'), u32(0), u32(2))));
+    const row = store.reputationTiers.get(`${subject}:trader`) ?? (await store.reputationTier(subject, 'trader'));
+    expect(row).toBeDefined();
+    expect(row?.tier).toBe(2);
+    expect(row?.role).toBe('trader');
+    expect(row?.subject).toBeDefined();
+  });
 });
 
 describe('Indexer', () => {

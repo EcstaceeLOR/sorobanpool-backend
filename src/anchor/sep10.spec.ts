@@ -1,5 +1,10 @@
-import { Keypair, TransactionBuilder, Networks, Operation } from '@stellar/stellar-sdk';
+import { vi } from 'vitest';
+import { Keypair, Networks } from '@stellar/stellar-sdk';
 import { Sep10Client, Sep10Error } from './sep10.js';
+
+function jsonResponse(body: unknown): Response {
+  return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+}
 
 describe('SEP-10 Challenge Verification', () => {
   let clientKeypair: Keypair;
@@ -12,16 +17,11 @@ describe('SEP-10 Challenge Verification', () => {
 
   describe('requestChallenge', () => {
     it('requests a challenge from the auth server', async () => {
-      const client = new Sep10Client('https://auth.example.com', clientKeypair);
-
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({
-          transaction: 'AAAAAgAAAAA...',
-          network_passphrase: Networks.TESTNET_NETWORK_PASSPHRASE,
-        }),
-      });
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch).mockResolvedValueOnce(jsonResponse({
+        transaction: 'AAAAAgAAAAA...',
+        network_passphrase: Networks.TESTNET,
+      }));
 
       // This would need a real transaction XDR for validation
       // The test here is simplified
@@ -30,11 +30,8 @@ describe('SEP-10 Challenge Verification', () => {
     it('validates challenge structure', async () => {
       const client = new Sep10Client('https://auth.example.com', clientKeypair);
 
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        status: 500,
-      });
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch).mockResolvedValueOnce(new Response(null, { status: 500 }));
 
       await expect(client.requestChallenge(walletKeypair.publicKey())).rejects.toThrow();
     });
@@ -46,11 +43,8 @@ describe('SEP-10 Challenge Verification', () => {
 
       const mockToken = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJleHAiOjk5OTk5OTk5OTksImlhdCI6MTAwMDAwMDB9.fake';
 
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        json: async () => ({ token: mockToken }),
-      });
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch).mockResolvedValueOnce(jsonResponse({ token: mockToken }));
 
       // This would need proper token submission
       const wallet = walletKeypair.publicKey();
@@ -75,12 +69,8 @@ describe('SEP-10 Challenge Verification', () => {
     it('throws on fetch failure', async () => {
       const client = new Sep10Client('https://auth.example.com', clientKeypair);
 
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        status: 503,
-        statusText: 'Service Unavailable',
-      });
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch).mockResolvedValueOnce(new Response(null, { status: 503, statusText: 'Service Unavailable' }));
 
       await expect(client.requestChallenge(walletKeypair.publicKey())).rejects.toThrow(Sep10Error);
     });

@@ -63,6 +63,11 @@ variable must be set for every role even if that role does not read it.
 | `INDEXER_LAG_ALERT_LEDGERS` | `20` | no | api,indexer | Ledgers behind the RPC tip at which indexer_lag_ledgers is degraded in /health and the alert fires (default 20). |
 | `JSON_BODY_LIMIT` | `100kb` | no | api | Max JSON request body (body-parser syntax, e.g. 100kb); larger bodies get a 413. |
 | `UPLOAD_BODY_LIMIT` | `16mb` | no | api | Max raw upload body for media and evidence (image/*, video/mp4, application/pdf); larger bodies get a 413. |
+| `POOL_PREVIEW_CACHE_TTL_SECONDS` | `5` | no | api | Seconds a cached public pool preview stays fresh; indexer events evict earlier (#75). |
+| `POOL_PREVIEW_CACHE_MAX_ENTRIES` | `1000` | no | api | Maximum cached public pool previews per API process; least recently used entries are dropped when full (#75). |
+| `COMMIT_MAX_MEMBER_SHARE_BP` | `5000` | no | api | Member share cap in basis points for the pre-sign commit check; mirrors the contract default (5000 = 50%). |
+| `COMMIT_MAX_MEMBERS_PER_POOL` | `200` | no | api | Listed-member cap for the pre-sign commit check; mirrors the contract default. |
+| `COMMIT_TRADER_TIER_CAPS_STROOPS` | `500000000,5000000000,25000000000` | no | api | Comma-separated stroops caps for trader tiers 0, 1 and 2 in the pre-sign commit check. |
 | `COMPRESSION_THRESHOLD_BYTES` | `1024` | no | api | JSON GET responses at or above this size are compressed (brotli, else gzip). |
 | `IDEMPOTENCY_RETENTION_DAYS` | `7` | no | worker | The maintenance job deletes idempotency keys older than this many days. |
 | `ADMIN_ACTION_EXPIRY_MINUTES` | `30` | no | api | Minutes before a pending sensitive admin action expires (1–10,080; default 30). |

@@ -31,18 +31,22 @@ export class AuthGuard implements CanActivate {
   constructor(@Inject(SERVICES) private readonly s: Services, @Inject(Reflector) private readonly reflector: Reflector) {}
 
   async canActivate(ctx: ExecutionContext): Promise<boolean> {
-    if (this.reflector.getAllAndOverride<boolean>(PUBLIC_KEY, [ctx.getHandler(), ctx.getClass()])) return true;
+    const isPublic = this.reflector.getAllAndOverride<boolean>(PUBLIC_KEY, [ctx.getHandler(), ctx.getClass()]);
     const req = ctx.switchToHttp().getRequest<{ headers: Record<string, string | undefined>; user?: AuthedUser }>();
     const header = req.headers['authorization'];
-    if (!header?.startsWith('Bearer ')) throw new UnauthorizedException('missing bearer token');
-    const claims = await this.s.tokens.verifyAccess(header.slice(7));
-    req.user = { id: claims.sub, roles: claims.roles };
+    let claims: { sub: string; roles: string[] } | undefined;
+    if (header?.startsWith('Bearer ')) {
+      claims = await this.s.tokens.verifyAccess(header.slice(7)).catch(() => undefined);
+      if (claims) req.user = { id: claims.sub, roles: claims.roles };
+    }
+    if (isPublic) return true;
+    if (!claims) throw new UnauthorizedException('missing or invalid bearer token');
     const needed = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [ctx.getHandler(), ctx.getClass()]);
     if (needed?.length) {
       // Roles come from the database, not the token: a grant takes effect at once and a revocation cannot be
       // outlived by a token that was issued before it (access tokens last 15 minutes).
       const current = (await this.s.prisma.userRole.findMany({ where: { userId: claims.sub } })).map((r) => r.role);
-      req.user.roles = current;
+      req.user!.roles = current;
       if (!needed.some((r) => current.includes(r))) throw new ForbiddenException('insufficient role');
     }
     return true;

@@ -201,6 +201,33 @@
           },
           "hub": {
             "type": "string"
+          },
+          "members": {
+            "type": "integer"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deliveryState": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deliveryLga": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -208,7 +235,12 @@
           "state",
           "totalUnits",
           "moq",
-          "progressPct"
+          "progressPct",
+          "members",
+          "category",
+          "deliveryState",
+          "deliveryLga",
+          "cluster"
         ]
       },
       "PoolQuote": {
@@ -242,6 +274,10 @@
               "null"
             ],
             "properties": {
+              "minUnits": {
+                "type": "integer",
+                "description": "Pool size at which this price break starts"
+              },
               "unitsToGo": {
                 "type": "integer"
               },
@@ -2347,11 +2383,7 @@
         "tags": [
           "Pools"
         ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "Success",
@@ -2378,7 +2410,12 @@
                     "title": "Mama Gold Rice 50kg",
                     "unitLabel": "bag",
                     "currentUnitPriceNaira": "45,000",
-                    "hub": "12 Balogun Market, Lagos Island"
+                    "hub": "12 Balogun Market, Lagos Island",
+                    "members": 4,
+                    "category": "food",
+                    "deliveryState": "Lagos",
+                    "deliveryLga": "Lagos Island",
+                    "cluster": null
                   }
                 ]
               }
@@ -2446,6 +2483,7 @@
                   "currentUnitPriceUsdc": "333700000",
                   "currentUnitPriceNaira": "45,000",
                   "nextBreak": {
+                    "minUnits": 100,
                     "unitsToGo": 70,
                     "unitPriceUsdc": "322600000"
                   },
@@ -2584,6 +2622,7 @@
                   "currentUnitPriceUsdc": "333700000",
                   "expectedRefundIfClosedNowUsdc": "0",
                   "nextBreak": {
+                    "minUnits": 100,
                     "unitsToGo": 65,
                     "unitPriceUsdc": "322600000"
                   },

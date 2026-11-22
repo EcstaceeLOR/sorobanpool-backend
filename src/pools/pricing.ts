@@ -37,6 +37,59 @@ export function refundFor(paid: bigint, allocatedUnits: number, finalPrice: bigi
   return paid - BigInt(allocatedUnits) * finalPrice;
 }
 
+export interface CommitCaps {
+  tiers: readonly Tier[];
+  poolTotalUnits: number;
+  maxPerMember: number;
+  maxUnits: number;
+  maxMemberShareBp: number;
+  maxMembersPerPool: number;
+  traderTierCaps: readonly bigint[];
+  memberUnits: number;
+  memberPaid: bigint;
+  memberCount: number;
+  listedMembers: number;
+  isListed: boolean;
+  registryLevel: number;
+  reputationTier: number;
+  units: number;
+}
+
+export interface CommitCapFailure {
+  error: 'OVER_MEMBER_LIMIT' | 'OVER_MEMBER_SHARE' | 'OVER_POOL_MAX' | 'TOO_MANY_MEMBERS' | 'OVER_TIER_CAP';
+  contractCode: number;
+  message: string;
+  limit: number | string;
+}
+
+export function validateCommitCaps(c: CommitCaps): CommitCapFailure | undefined {
+  const newUnits = c.memberUnits + c.units;
+  if (newUnits > c.maxPerMember) {
+    return { error: 'OVER_MEMBER_LIMIT', contractCode: 315, message: `You can commit at most ${c.maxPerMember} units to this pool`, limit: c.maxPerMember };
+  }
+  const shareCap = Math.max(1, Math.floor((c.maxUnits * c.maxMemberShareBp) / 10_000));
+  const onlyMember = c.memberCount === 0 || (c.memberCount === 1 && c.memberUnits > 0);
+  if (!onlyMember && newUnits > shareCap) {
+    return { error: 'OVER_MEMBER_SHARE', contractCode: 316, message: `One member can take at most ${shareCap} units while others have joined`, limit: shareCap };
+  }
+  if (c.poolTotalUnits + c.units > c.maxUnits) {
+    return { error: 'OVER_POOL_MAX', contractCode: 317, message: `This pool has room for ${Math.max(0, c.maxUnits - c.poolTotalUnits)} more units`, limit: c.maxUnits };
+  }
+  if (!c.isListed && c.listedMembers >= c.maxMembersPerPool) {
+    return { error: 'TOO_MANY_MEMBERS', contractCode: 319, message: `This pool is full at ${c.maxMembersPerPool} members`, limit: c.maxMembersPerPool };
+  }
+  const traderTier = c.registryLevel === 0 ? 0 : c.reputationTier >= 2 ? 2 : 1;
+  const cap = c.traderTierCaps[traderTier] ?? c.traderTierCaps[c.traderTierCaps.length - 1];
+  if (cap === undefined) return undefined;
+  const newPaid = c.memberPaid + quoteCommit(c.tiers, c.poolTotalUnits, c.units);
+  if (newPaid > cap) {
+    return { error: 'OVER_TIER_CAP', contractCode: 318, message: `Your verification tier allows ${formatCap(cap)} USDC in a pool`, limit: cap.toString() };
+  }
+  return undefined;
+}
+
+const formatCap = (stroops: bigint) => (Number(stroops) / 10_000_000).toLocaleString('en-US');
+
 export interface CommitQuote {
   /** Maximum the member pays now. */
   amountNow: bigint;
@@ -44,7 +97,7 @@ export interface CommitQuote {
   currentUnitPrice: bigint;
   /** Refund if the pool closed at the current tier after this commit. */
   expectedRefundIfClosedNow: bigint;
-  nextBreak: { unitsToGo: number; unitPrice: bigint } | null;
+  nextBreak: { minUnits: number; unitPrice: bigint; unitsToGo: number } | null;
 }
 
 /** Everything the "before you pay" screen shows. */
@@ -58,6 +111,6 @@ export function quote(tiers: readonly Tier[], totalUnits: number, units: number)
     amountNow,
     currentUnitPrice,
     expectedRefundIfClosedNow: amountNow - currentUnitPrice * BigInt(units),
-    nextBreak: next ? { unitsToGo: next.minUnits - after, unitPrice: next.unitPrice } : null,
+    nextBreak: next ? { minUnits: next.minUnits, unitPrice: next.unitPrice, unitsToGo: next.minUnits - after } : null,
   };
 }

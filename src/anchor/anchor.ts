@@ -54,7 +54,7 @@ export class AnchorError extends Error {
 
 export function validateQuoteExpiry(expiresAtSeconds: number, now: Date): void {
   const nowSeconds = Math.floor(now.getTime() / 1000);
-  if (nowSeconds > expiresAtSeconds) {
+  if (nowSeconds >= expiresAtSeconds) {
     throw new AnchorError('QUOTE_EXPIRED', `Quote expired at ${new Date(expiresAtSeconds * 1000).toISOString()}`);
   }
 }

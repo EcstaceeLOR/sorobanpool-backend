@@ -13,11 +13,22 @@ describe('quote', () => {
     expect(formatUsdc(q.amountNow)).toBe('100');
     expect(formatUsdc(q.currentUnitPrice)).toBe('0.9');
     expect(formatUsdc(q.expectedRefundIfClosedNow)).toBe('10');
-    expect(q.nextBreak).toEqual({ unitsToGo: 180, unitPrice: toStroops('0.8') });
+    expect(q.nextBreak).toEqual({ minUnits: 400, unitPrice: toStroops('0.8'), unitsToGo: 180 });
   });
 
   it('has no next break at the top tier', () => {
     expect(quote(tiers, 450, 10).nextBreak).toBeNull();
+    expect(quote(tiers, 400, 1).nextBreak).toBeNull();
+  });
+
+  it('reports the next break at each tier boundary and the unit before it', () => {
+    expect(quote(tiers, 0, 10).nextBreak).toEqual({ minUnits: 100, unitPrice: toStroops('1'), unitsToGo: 90 });
+    expect(quote(tiers, 99, 1).nextBreak).toEqual({ minUnits: 200, unitPrice: toStroops('0.9'), unitsToGo: 100 });
+    expect(quote(tiers, 100, 1).nextBreak).toEqual({ minUnits: 200, unitPrice: toStroops('0.9'), unitsToGo: 99 });
+    expect(quote(tiers, 199, 1).nextBreak).toEqual({ minUnits: 400, unitPrice: toStroops('0.8'), unitsToGo: 200 });
+    expect(quote(tiers, 200, 1).nextBreak).toEqual({ minUnits: 400, unitPrice: toStroops('0.8'), unitsToGo: 199 });
+    expect(quote(tiers, 399, 0).nextBreak).toEqual({ minUnits: 400, unitPrice: toStroops('0.8'), unitsToGo: 1 });
+    expect(quote(tiers, 399, 1).nextBreak).toBeNull();
   });
 
   it('formats and parses money round trip', () => {

@@ -32,7 +32,7 @@ function resolver(doc: Doc) {
 
 const typesOf = (s: Schema | undefined): Set<string> | undefined =>
   s?.type === undefined ? undefined : new Set(Array.isArray(s.type) ? (s.type as string[]) : [s.type as string]);
-const missing = (a: Iterable<unknown>, b: Set<unknown>) => [...a].filter((x) => !b.has(x));
+const missing = <T>(a: Iterable<T>, b: ReadonlySet<T>): T[] => [...a].filter((x) => !b.has(x));
 const props = (s: Schema | undefined) => (s?.properties ?? {}) as Record<string, Schema>;
 const required = (s: Schema | undefined) => new Set((s?.required ?? []) as string[]);
 const num = (v: unknown) => (typeof v === 'number' ? v : undefined);

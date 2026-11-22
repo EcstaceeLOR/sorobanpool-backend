@@ -25,12 +25,57 @@ describe('SponsorshipPolicy', () => {
     await expect(p.authorize('u2', 'CGROUP', 'commit')).resolves.toBeUndefined(); // other users unaffected
   });
 
+  it('uses per-function cap overrides with compound usage keys', async () => {
+    const usage = new MemoryUsageStore();
+    const p = new SponsorshipPolicy(contracts, usage, 3, () => new Date('2026-10-05T10:00:00Z'), { 'group_buy.commit': 1 });
+    await expect(p.authorize('u1', 'CGROUP', 'commit')).resolves.toBeUndefined();
+    await expect(p.authorize('u1', 'CGROUP', 'commit')).rejects.toMatchObject({ code: 'CAP_REACHED' });
+    await expect(p.authorize('u1', 'CGROUP', 'increase')).resolves.toBeUndefined();
+    await expect(p.authorize('u1', 'CGROUP', 'increase')).resolves.toBeUndefined();
+    await expect(p.authorize('u1', 'CGROUP', 'increase')).resolves.toBeUndefined();
+    await expect(p.authorize('u1', 'CGROUP', 'increase')).rejects.toMatchObject({ code: 'CAP_REACHED' });
+  });
+
+  it('applies admin override caps with compound usage keys', async () => {
+    const p = new SponsorshipPolicy(contracts, new MemoryUsageStore(), 5, () => new Date('2026-10-05T10:00:00Z'), { 'registry.suspend': 1 });
+    await expect(p.authorizeAdminAction('admin', 'CREG', 'suspend')).resolves.toBeUndefined();
+    await expect(p.authorizeAdminAction('admin', 'CREG', 'suspend')).rejects.toMatchObject({ code: 'CAP_REACHED' });
+  });
+
+  it('applies admin override caps for unsuspend', async () => {
+    const p = new SponsorshipPolicy(contracts, new MemoryUsageStore(), 5, () => new Date('2026-10-05T10:00:00Z'), { 'registry.unsuspend': 1 });
+    await expect(p.authorizeAdminAction('admin', 'CREG', 'unsuspend')).resolves.toBeUndefined();
+    await expect(p.authorizeAdminAction('admin', 'CREG', 'unsuspend')).rejects.toMatchObject({ code: 'CAP_REACHED' });
+  });
+
+  it('rejects admin actions for unknown contracts', async () => {
+    const p = policy();
+    await expect(p.authorizeAdminAction('admin', 'CUNKNOWN', 'suspend')).rejects.toMatchObject({ code: 'NOT_ALLOWED' });
+  });
+
   it('allows only registry suspension calls through the separate admin authorization path', async () => {
     const p = policy();
     await expect(p.authorizeAdminAction('admin', 'CREG', 'suspend')).resolves.toBeUndefined();
     await expect(p.authorizeAdminAction('admin', 'CREG', 'unsuspend')).resolves.toBeUndefined();
     await expect(p.authorizeAdminAction('admin', 'CREG', 'attest')).rejects.toMatchObject({ code: 'NOT_ALLOWED' });
     await expect(p.authorizeAdminAction('admin', 'CCONFIG', 'suspend')).rejects.toMatchObject({ code: 'NOT_ALLOWED' });
+  });
+
+  it('falls back to default cap when dailyCap is undefined', async () => {
+    const usage = new MemoryUsageStore();
+    const p = new SponsorshipPolicy(contracts, usage, undefined, () => new Date('2026-10-05T10:00:00Z'), {});
+    await expect(p.authorize('u1', 'CREG', 'register')).resolves.toBeUndefined();
+  });
+
+  it('uses function override cap for a sponsored function', async () => {
+    const p = new SponsorshipPolicy(contracts, new MemoryUsageStore(), 5, () => new Date('2026-10-05T10:00:00Z'), { 'registry.register': 1 });
+    await expect(p.authorize('u1', 'CREG', 'register')).resolves.toBeUndefined();
+    await expect(p.authorize('u1', 'CREG', 'register')).rejects.toMatchObject({ code: 'CAP_REACHED' });
+  });
+
+  it('works with default now and default cap params', async () => {
+    const p = new SponsorshipPolicy(contracts, new MemoryUsageStore());
+    await expect(p.authorize('u1', 'CREG', 'register')).resolves.toBeUndefined();
   });
 });
 

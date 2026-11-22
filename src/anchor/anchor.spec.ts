@@ -1,4 +1,4 @@
-import { getSecondsUntilExpiry, validateQuoteExpiry, AnchorError, QUOTE_EXPIRY_SECONDS, MockAnchor } from './anchor.js';
+import { getSecondsUntilExpiry, validateQuoteExpiry, AnchorError, QUOTE_EXPIRY_SECONDS } from './anchor.js';
 import { startHarness, type Harness } from '../../test/harness.js';
 
 describe('Quote Expiry', () => {

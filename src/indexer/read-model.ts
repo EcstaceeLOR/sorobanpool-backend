@@ -59,6 +59,12 @@ export interface BondRow {
   total: bigint;
 }
 
+export interface ReputationTierRow {
+  subject: string;
+  role: string;
+  tier: number;
+}
+
 /** Persistence port for the projector. The Prisma implementation maps these onto the schema. */
 export interface ReadStore {
   pool(id: bigint): Promise<PoolRow | undefined>;
@@ -69,6 +75,8 @@ export interface ReadStore {
   saveDispute(row: DisputeRow): Promise<void>;
   bond(supplier: string): Promise<BondRow | undefined>;
   saveBond(row: BondRow): Promise<void>;
+  reputationTier(subject: string, role: string): Promise<ReputationTierRow | undefined>;
+  saveReputationTier(row: ReputationTierRow): Promise<void>;
   /** True if the event id was already processed; marks it processed otherwise. */
   markProcessed(eventId: string, ev: { ledger: number; contract: string; topic: string }): Promise<boolean>;
   /** Runs `fn` so that all of its writes commit together or not at all. */
@@ -80,6 +88,7 @@ export class MemoryReadStore implements ReadStore {
   commitments = new Map<string, CommitmentRow>();
   disputes = new Map<bigint, DisputeRow>();
   bonds = new Map<string, BondRow>();
+  reputationTiers = new Map<string, ReputationTierRow>();
   processed = new Set<string>();
   async pool(id: bigint) { return this.pools.get(id); }
   async savePool(r: PoolRow) { this.pools.set(r.id, { ...r }); }
@@ -89,6 +98,8 @@ export class MemoryReadStore implements ReadStore {
   async saveDispute(r: DisputeRow) { this.disputes.set(r.id, { ...r }); }
   async bond(s: string) { return this.bonds.get(s); }
   async saveBond(r: BondRow) { this.bonds.set(r.supplier, { ...r }); }
+  async reputationTier(subject: string, role: string) { return this.reputationTiers.get(`${subject}:${role}`); }
+  async saveReputationTier(r: ReputationTierRow) { this.reputationTiers.set(`${r.subject}:${r.role}`, { ...r }); }
   async markProcessed(id: string) {
     if (this.processed.has(id)) return true;
     this.processed.add(id);
@@ -98,7 +109,7 @@ export class MemoryReadStore implements ReadStore {
   async atomically<T>(fn: (s: ReadStore) => Promise<T>): Promise<T> {
     const snap = {
       pools: new Map(this.pools), commitments: new Map(this.commitments), disputes: new Map(this.disputes),
-      bonds: new Map(this.bonds), processed: new Set(this.processed),
+      bonds: new Map(this.bonds), reputationTiers: new Map(this.reputationTiers), processed: new Set(this.processed),
     };
     try {
       return await fn(this);

@@ -5,6 +5,8 @@ import { StaticFxProvider } from '../src/app/services.js';
 import { Projector } from '../src/indexer/projector.js';
 import { PrismaReadStore } from '../src/persistence/prisma-stores.js';
 import { decodeEvent } from '../src/indexer/decode.js';
+import { affectedPools } from '../src/workers/runners.js';
+import type { Prisma } from '../src/generated/prisma/client.js';
 import { a, bytes, i128, raw, tup, u32, u64 } from './events.js';
 
 let h: Harness;
@@ -23,6 +25,7 @@ const offerBody = () => ({
 
 async function secondAdmin() {
   const admin = await h.login(newPhone());
+  await h.bindWallet(admin.token, Keypair.random());
   await h.db.prisma.userRole.upsert({
     where: { userId_role: { userId: admin.userId, role: 'ADMIN' } },
     create: { userId: admin.userId, role: 'ADMIN' },
@@ -232,6 +235,31 @@ describe('pools', () => {
     expect([meta.format, meta.width, meta.height]).toEqual(['png', 1200, 630]);
   });
 
+  it('caches public previews and evicts them when an applied event affects the pool', async () => {
+    const p = await livePool();
+    const proj = new Projector(new PrismaReadStore(h.db.prisma));
+    const offer = await h.db.prisma.offer.findUniqueOrThrow({ where: { id: p.offerId } });
+    const supplier = (await h.db.prisma.user.findUniqueOrThrow({ where: { id: offer.supplierId } })).walletAddress!;
+    const id = BigInt(Date.now()) * 1_000n + BigInt(phoneN++);
+    const apply = (r: ReturnType<typeof raw>) => proj.apply(decodeEvent(r)!);
+    await apply(raw('group_buy', 'pool_new', u64(id), tup(a(p.orgKp.publicKey()), a(supplier), bytes(7), nativeToScVal(Buffer.from(p.prep.hubHash, 'hex'))), 10));
+
+    const before = h.s.previewCache.size;
+    const first = await h.http().get(`/v1/p/${p.prep.shareSlug}`).expect(200);
+    expect(h.s.previewCache.size).toBe(before + 1);
+    const second = await h.http().get(`/v1/p/${p.prep.shareSlug}`).expect(200);
+    expect(second.body).toEqual(first.body);
+    expect(h.s.previewCache.size).toBe(before + 1);
+
+    const event = decodeEvent(raw('group_buy', 'committed', u64(id), tup(a(Keypair.random().publicKey()), u32(120), i128(1_000_000_000n)), 11))!;
+    expect(await affectedPools(h.s, event)).toEqual([id]);
+    for (const affected of await affectedPools(h.s, event)) h.s.previewCache.evictPool(affected);
+    await proj.apply(event);
+    const after = await h.http().get(`/v1/p/${p.prep.shareSlug}`).expect(200);
+    expect(after.body.totalUnits).toBe(120);
+    expect(h.s.previewCache.size).toBe(before + 1);
+  });
+
   it('maps pool actions to the right contract calls for the signed-in wallet', async () => {
     const p = await livePool();
     const t = await h.login(newPhone());
@@ -244,6 +272,88 @@ describe('pools', () => {
     expect(n.body.error).toBe('NOT_IMPLEMENTED');
     await h.http().post('/v1/pools/5/nonsense/prepare').set(auth(t.token)).send({}).expect(404);
     await h.http().post('/v1/pools/5/delivery/prepare').set(auth(p.orgToken)).send({ receivedUnits: 10, evidenceIds: ['nope'] }).expect(400);
+  });
+
+  it('filters and pages the public pool list, and limits anonymous results to Open pools', async () => {
+    const p = await livePool();
+    const me = await h.http().get('/v1/me').set(auth(p.s.token)).expect(200);
+    const tag = `filter-${Date.now()}`;
+    const id0 = BigInt(Date.now()) * 1_000n + BigInt(phoneN++);
+    const base = {
+      offerId: p.offerId, organizerAddress: p.orgKp.publicKey(), supplierAddress: me.body.walletAddress as string,
+      hubAddress: 'Gate', hubContact: '0803', pickupWindow: {}, fillDeadline: new Date(),
+    };
+    const make = (n: number, patch: Partial<Prisma.PoolUncheckedCreateInput>) => h.db.prisma.pool.create({
+      data: { ...base, id: id0 + BigInt(n), hubHash: `${tag}-${n}`, shareSlug: `${tag}-${n}`, ...patch } as Prisma.PoolUncheckedCreateInput,
+    });
+    await make(1, { state: 'Open', category: tag, deliveryState: 'FCT', deliveryLga: 'Abuja Municipal', cluster: `${tag}-cluster` });
+    await make(2, { state: 'Open', category: `${tag}-b`, deliveryState: 'Lagos', deliveryLga: 'Ikeja', cluster: `${tag}-cluster` });
+    await make(3, { state: 'Settled', category: tag, deliveryState: 'FCT', deliveryLga: 'Abuja Municipal', cluster: `${tag}-cluster` });
+    await make(4, { state: 'Open', category: tag, deliveryState: 'Kano', deliveryLga: 'Nassarawa', cluster: `${tag}-other` });
+
+    const filtered = await h.http().get(`/v1/pools?category=${tag}&deliveryState=FCT&lga=Abuja%20Municipal&cluster=${tag}-cluster`).expect(200);
+    expect(filtered.body).toHaveLength(1);
+    expect(filtered.body[0]).toMatchObject({ id: (id0 + 1n).toString(), category: tag, deliveryState: 'FCT', deliveryLga: 'Abuja Municipal', cluster: `${tag}-cluster`, members: 0 });
+    expect((await h.http().get(`/v1/pools?category=${tag}&deliveryState=Lagos`).expect(200)).body).toEqual([]);
+    expect((await h.http().get(`/v1/pools?category=${tag}&state=Settled`).expect(200)).body).toEqual([]); // anonymous
+
+    const trader = await h.login(newPhone());
+    const authed = await h.http().get(`/v1/pools?category=${tag}&state=Settled`).set(auth(trader.token)).expect(200);
+    expect(authed.body.map((r: { id: string }) => r.id)).toEqual([(id0 + 3n).toString()]);
+    const mine = await h.http().get(`/v1/pools?category=${tag}&mine=true`).set(auth(p.orgToken)).expect(200);
+    expect(mine.body.map((r: { id: string }) => r.id).sort()).toEqual([(id0 + 1n).toString(), (id0 + 3n).toString(), (id0 + 4n).toString()].sort());
+
+    const first = await h.http().get(`/v1/pools?category=${tag}&limit=1`).expect(200);
+    expect(first.body.map((r: { id: string }) => r.id)).toEqual([(id0 + 4n).toString()]);
+    const cursor = first.headers['x-next-cursor'];
+    expect(cursor).toBe((id0 + 4n).toString());
+    const second = await h.http().get(`/v1/pools?category=${tag}&limit=1&cursor=${cursor}`).expect(200);
+    expect(second.body.map((r: { id: string }) => r.id)).toEqual([(id0 + 1n).toString()]);
+    expect(second.headers['x-next-cursor']).toBeUndefined();
+  });
+});
+
+describe('commit pre-sign caps', () => {
+  it('rejects each contract cap before building a transaction', async () => {
+    const s = await approvedSupplier();
+    const me = await h.http().get('/v1/me').set(auth(s.token)).expect(200);
+    const offer = await h.http().post('/v1/offers').set(auth(s.token)).send({ ...offerBody(), maxUnits: 1000, maxPerMember: 1000 }).expect(201);
+    await h.http().post(`/v1/offers/${offer.body.id}/publish`).set(auth(s.token)).expect(200);
+    const t = await h.login(newPhone());
+    await h.bindWallet(t.token, Keypair.random());
+    const id0 = BigInt(Date.now()) * 1_000n + BigInt(phoneN++);
+    const pool = (n: number) => h.db.prisma.pool.create({
+      data: {
+        id: id0 + BigInt(n), offerId: offer.body.id, organizerAddress: Keypair.random().publicKey(),
+        supplierAddress: me.body.walletAddress as string, hubAddress: 'Gate', hubContact: '0803',
+        hubHash: `${id0}-${n}`, shareSlug: `cap-${id0}-${n}`, pickupWindow: {}, state: 'Open', fillDeadline: new Date(),
+      },
+    });
+    await Promise.all([pool(1), pool(2), pool(3), pool(4), pool(5)]);
+    const commit = async (id: bigint, units: number) => {
+      const before = h.chain.calls.filter((c) => c.fn === 'commit').length;
+      const r = await h.http().post(`/v1/pools/${id}/commit/prepare`).set(auth(t.token)).send({ units }).expect(400);
+      expect(h.chain.calls.filter((c) => c.fn === 'commit').length).toBe(before);
+      return r.body;
+    };
+
+    expect(await commit(id0 + 1n, 51)).toMatchObject({ error: 'OVER_TIER_CAP', contractCode: 318, limit: '500000000' }); // trader tier 0
+
+    await h.db.prisma.offer.update({ where: { id: offer.body.id }, data: { maxPerMember: 50 } });
+    expect(await commit(id0 + 2n, 51)).toMatchObject({ error: 'OVER_MEMBER_LIMIT', contractCode: 315, limit: 50 });
+
+    await h.db.prisma.offer.update({ where: { id: offer.body.id }, data: { maxPerMember: 1000 } });
+    await h.db.prisma.commitment.create({ data: { poolId: id0 + 3n, memberAddress: Keypair.random().publicKey(), units: 1, paid: '1' } });
+    expect(await commit(id0 + 3n, 501)).toMatchObject({ error: 'OVER_MEMBER_SHARE', contractCode: 316, limit: 500 });
+
+    await h.db.prisma.offer.update({ where: { id: offer.body.id }, data: { maxUnits: 500 } });
+    expect(await commit(id0 + 4n, 501)).toMatchObject({ error: 'OVER_POOL_MAX', contractCode: 317, limit: 500 });
+
+    await h.db.prisma.offer.update({ where: { id: offer.body.id }, data: { maxUnits: 1000 } });
+    await h.db.prisma.commitment.createMany({ data: Array.from({ length: 200 }, () => ({
+      poolId: id0 + 5n, memberAddress: Keypair.random().publicKey(), units: 0, paid: '0',
+    })) });
+    expect(await commit(id0 + 5n, 1)).toMatchObject({ error: 'TOO_MANY_MEMBERS', contractCode: 319, limit: 200 });
   });
 });
 
@@ -486,6 +596,7 @@ describe('reports: supplier statement and admin risk overview', () => {
     const supplier = await approvedSupplier();
     const me = await h.http().get('/v1/me').set(auth(supplier.token)).expect(200);
     const offer = await h.http().post('/v1/offers').set(auth(supplier.token)).send(offerBody()).expect(201);
+    await h.db.prisma.pool.updateMany({ data: { escrowBalance: '0' } });
     const poolId = await settledPoolFor(me.body.walletAddress, offer.body.id);
     const now = new Date();
     await h.db.prisma.pool.update({ where: { id: poolId }, data: { deliveredAt: now, endedAt: now, escrowBalance: '12.5' } });
@@ -604,7 +715,7 @@ describe('admin supplier queue, documents and user lookup (#131-#134)', () => {
     const admin = await h.login(PHONE_ADMIN);
     const byPhone = await h.http().get(`/v1/admin/users?q=${phone.slice(-4)}`).set(auth(admin.token)).expect(200);
     const hit = byPhone.body.find((r: { id: string }) => r.id === u.userId);
-    expect(hit.phone).toMatch(new RegExp(`^\*+${phone.slice(-4)}$`));
+    expect(hit.phone).toMatch(new RegExp(`^\\*+${phone.slice(-4)}$`));
     expect(hit).not.toHaveProperty('displayName');
     expect((await h.http().get(`/v1/admin/users?q=${u.userId}`).set(auth(admin.token)).expect(200)).body).toHaveLength(1);
     expect(await h.db.prisma.auditLog.findFirst({ where: { action: 'user.search', actorId: admin.userId } })).not.toBeNull();

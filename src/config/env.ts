@@ -65,6 +65,16 @@ export const envSchema = z.object({
   JSON_BODY_LIMIT: z.string().min(1).default('100kb'),
   /** Max raw upload body for media and evidence (image/*, video/mp4, application/pdf) (#171). */
   UPLOAD_BODY_LIMIT: z.string().min(1).default('16mb'),
+  /** Seconds a cached public pool preview stays fresh before it is rebuilt (#75). */
+  POOL_PREVIEW_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(5),
+  /** Maximum number of cached public pool previews per API process (#75). */
+  POOL_PREVIEW_CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(1000),
+  /** Max member share of a pool in basis points, used by the commit pre-check (#78). */
+  COMMIT_MAX_MEMBER_SHARE_BP: z.coerce.number().int().min(1).max(10_000).default(5000),
+  /** Max listed members per pool, used by the commit pre-check (#78). */
+  COMMIT_MAX_MEMBERS_PER_POOL: z.coerce.number().int().positive().default(200),
+  /** Comma-separated stroops caps for trader tiers 0, 1 and 2, used by the commit pre-check (#78). */
+  COMMIT_TRADER_TIER_CAPS_STROOPS: z.string().regex(/^\d+(,\d+){2}$/).default('500000000,5000000000,25000000000'),
   /** JSON GET responses at or above this size are compressed (brotli, else gzip) (#174). */
   COMPRESSION_THRESHOLD_BYTES: z.coerce.number().int().nonnegative().default(1024),
   /** Idempotency keys older than this are deleted by the maintenance job (#173). */

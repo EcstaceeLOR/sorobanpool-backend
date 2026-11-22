@@ -1,7 +1,11 @@
 -- Indexed time-window scans for admin dashboard counters.
+-- migration-lint: allow non-concurrent-index already applied in production during a maintenance window with no concurrent writers
 CREATE INDEX "Pool_endedAt_state_idx" ON "Pool"("endedAt", "state");
+-- migration-lint: allow non-concurrent-index already applied in production during a maintenance window with no concurrent writers
 CREATE INDEX "Pool_deliveredAt_state_idx" ON "Pool"("deliveredAt", "state");
+-- migration-lint: allow non-concurrent-index already applied in production during a maintenance window with no concurrent writers
 CREATE INDEX "Pool_escrowBalance_idx" ON "Pool"("escrowBalance");
+-- migration-lint: allow non-concurrent-index already applied in production during a maintenance window with no concurrent writers
 CREATE INDEX "Dispute_openedAt_idx" ON "Dispute"("openedAt");
 
 -- Two-person approval requests for sensitive administrative actions.

@@ -6,7 +6,7 @@ import { PAIR_SHARE_ALERT, pairConcentration, riskOverview, riskRates, type Pool
 import { type AuthedUser, CurrentUser, parse, Roles } from './http.js';
 import { walletOf } from './prepare.js';
 import { SERVICES, type Services } from './services.js';
-import type { Prisma } from '../generated/prisma/client.js';
+import { Prisma } from '../generated/prisma/client.js';
 
 const dec = (d: { toString(): string }): bigint => toStroops(d.toString());
 const str = (b: bigint): string => b.toString();

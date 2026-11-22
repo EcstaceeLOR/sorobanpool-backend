@@ -169,7 +169,12 @@ export const OPENAPI_EXAMPLES: Record<string, OperationExample> = {
         title: "Mama Gold Rice 50kg",
         unitLabel: "bag",
         currentUnitPriceNaira: "45,000",
-        hub: "12 Balogun Market, Lagos Island"
+        hub: "12 Balogun Market, Lagos Island",
+        members: 4,
+        category: "food",
+        deliveryState: "Lagos",
+        deliveryLga: "Lagos Island",
+        cluster: null
       }
     ]
   },
@@ -201,6 +206,7 @@ export const OPENAPI_EXAMPLES: Record<string, OperationExample> = {
       currentUnitPriceUsdc: "333700000",
       currentUnitPriceNaira: "45,000",
       nextBreak: {
+        minUnits: 100,
         unitsToGo: 70,
         unitPriceUsdc: "322600000"
       },
@@ -234,6 +240,7 @@ export const OPENAPI_EXAMPLES: Record<string, OperationExample> = {
       currentUnitPriceUsdc: "333700000",
       expectedRefundIfClosedNowUsdc: "0",
       nextBreak: {
+        minUnits: 100,
         unitsToGo: 65,
         unitPriceUsdc: "322600000"
       },

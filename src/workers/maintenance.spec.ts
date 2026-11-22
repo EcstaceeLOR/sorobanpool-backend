@@ -101,8 +101,8 @@ describe('purgeIdempotencyKeys (#173)', () => {
 
 describe('expireStaleAnchorTransfers', () => {
   let h: Harness;
-  beforeAll(async () => { h = await startHarness(); });
-  afterAll(async () => { await h.close(); });
+  beforeEach(async () => { h = await startHarness(); });
+  afterEach(async () => { await h.close(); });
 
   it('marks pending anchor transfers older than the limit as EXPIRED', async () => {
     const now = new Date('2026-03-10T12:00:00Z');
@@ -110,7 +110,7 @@ describe('expireStaleAnchorTransfers', () => {
     const user = await h.s.prisma.user.create({ data: { phone: '+2348013333333' } });
 
     // Create transfers at different ages
-    const oldTransfer = await h.s.prisma.anchorTransfer.create({
+    const _oldTransfer = await h.s.prisma.anchorTransfer.create({
       data: {
         id: 'old-1',
         userId: user.id,
@@ -121,7 +121,7 @@ describe('expireStaleAnchorTransfers', () => {
         createdAt: new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000), // 2 days ago
       },
     });
-    const freshTransfer = await h.s.prisma.anchorTransfer.create({
+    const _freshTransfer = await h.s.prisma.anchorTransfer.create({
       data: {
         id: 'fresh-1',
         userId: user.id,
@@ -132,7 +132,7 @@ describe('expireStaleAnchorTransfers', () => {
         createdAt: new Date(now.getTime() - 12 * 60 * 60 * 1000), // 12 hours ago
       },
     });
-    const completedTransfer = await h.s.prisma.anchorTransfer.create({
+    const _completedTransfer = await h.s.prisma.anchorTransfer.create({
       data: {
         id: 'completed-1',
         userId: user.id,
@@ -165,7 +165,7 @@ describe('expireStaleAnchorTransfers', () => {
     const user = await h.s.prisma.user.create({ data: { phone: '+2348014444444' } });
 
     // Create old transfer with different statuses
-    const failedTransfer = await h.s.prisma.anchorTransfer.create({
+    const _failedTransfer = await h.s.prisma.anchorTransfer.create({
       data: {
         id: 'failed-old',
         userId: user.id,
@@ -176,7 +176,7 @@ describe('expireStaleAnchorTransfers', () => {
         createdAt: new Date(now.getTime() - 2 * 60 * 60 * 1000),
       },
     });
-    const expiredTransfer = await h.s.prisma.anchorTransfer.create({
+    const _expiredTransfer = await h.s.prisma.anchorTransfer.create({
       data: {
         id: 'expired-old',
         userId: user.id,
@@ -195,5 +195,27 @@ describe('expireStaleAnchorTransfers', () => {
     const expiredStatus = (await h.s.prisma.anchorTransfer.findUnique({ where: { id: 'expired-old' } }))?.status;
     expect(failedStatus).toBe('FAILED');
     expect(expiredStatus).toBe('EXPIRED');
+  });
+
+  it('expires a pending transfer exactly at the expiry boundary', async () => {
+    const now = new Date('2026-03-12T12:00:00Z');
+    const expiryMinutes = 60;
+    const user = await h.s.prisma.user.create({ data: { phone: '+2348015555555' } });
+    await h.s.prisma.anchorTransfer.create({
+      data: {
+        id: 'boundary-old',
+        userId: user.id,
+        kind: 'DEPOSIT',
+        anchor: 'mock',
+        anchorTxId: '',
+        status: 'PENDING',
+        createdAt: new Date(now.getTime() - expiryMinutes * 60_000),
+      },
+    });
+
+    const result = await expireStaleAnchorTransfers(h.s.prisma, now, expiryMinutes);
+
+    expect(result.expired).toBe(1);
+    expect((await h.s.prisma.anchorTransfer.findUnique({ where: { id: 'boundary-old' } }))?.status).toBe('EXPIRED');
   });
 });

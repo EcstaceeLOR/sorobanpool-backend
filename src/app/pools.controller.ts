@@ -1,11 +1,12 @@
-import { BadRequestException, Body, Controller, Get, Header, Inject, NotFoundException, Param, Post, Query, StreamableFile } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Header, Inject, NotFoundException, Param, Post, Query, Res, StreamableFile } from '@nestjs/common';
+import type { Response } from 'express';
 import { createHash, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import { A } from '../chain/args.js';
 import { canonicalJson, sha256Hex } from '../common/canonical-json.js';
 import { formatUsdc, toStroops } from '../common/money.js';
 import { unitLabelHash } from '../catalog/offer.js';
-import { quote as priceQuote, ceilingPrice, tierIndex } from '../pools/pricing.js';
+import { quote as priceQuote, ceilingPrice, tierIndex, validateCommitCaps } from '../pools/pricing.js';
 import { renderShareCard } from '../sharecards/sharecard.js';
 import { tiersUsdcFromJson, publicOffer } from './catalog.controller.js';
 import { type AuthedUser, CurrentUser, parse, Public, Roles } from './http.js';
@@ -22,6 +23,14 @@ export const poolPrepareBody = z.object({
   pickupWindow: z.object({ from: z.string(), to: z.string() }), organizerFeeBp: z.number().int().min(0).max(200).default(0), clusterOnly: z.boolean().default(false),
 });
 export const commitBody = z.object({ units: z.number().int().positive(), method: z.enum(['USDC', 'NGN']).default('USDC') });
+export const poolListQuery = z.object({
+  state: z.string().max(30).optional(), category: z.string().max(60).optional(), deliveryState: z.string().max(60).optional(),
+  lga: z.string().max(60).optional(), cluster: z.string().max(30).optional(), cursor: z.string().regex(/^\d+$/).optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20), mine: z.enum(['true', 'false']).default('false'),
+});
+
+const PUBLIC_POOL_STATES = ['Open'];
+type PreviewView = Record<string, unknown>;
 
 @Controller()
 export class PoolsController {
@@ -49,7 +58,7 @@ export class PoolsController {
     const hubHash = sha256Hex(canonicalJson({ address: b.hub.address, contact: b.hub.contact, nonce: randomBytes(16).toString('hex') }));
     const shareSlug = randomBytes(5).toString('hex');
     await this.s.prisma.pendingPool.create({
-      data: { hubHash, offerId: offer.id, organizerAddress: organizer, hubAddress: b.hub.address, hubContact: b.hub.contact, pickupWindow: b.pickupWindow, fillDeadline: b.fillDeadline, shareSlug },
+      data: { hubHash, offerId: offer.id, organizerAddress: organizer, hubAddress: b.hub.address, hubContact: b.hub.contact, pickupWindow: b.pickupWindow, fillDeadline: b.fillDeadline, shareSlug, cluster: cluster ?? null },
     });
     try {
       const prepared = await prepareAction(this.s, 'group_buy', 'create_pool', A.createPool(organizer, {
@@ -84,13 +93,38 @@ export class PoolsController {
         filledAt: pool.filledAt,
         progressPct: offer && offer.moq > 0 ? Math.min(100, Math.floor((pool.totalUnits * 100) / offer.moq)) : 0,
         currentUnitPriceUsdc: price.toString(), currentUnitPriceNaira: rate ? naira(((price * BigInt(Math.round(rate * 1e6))) / 10_000_000n / 1_000_000n)) : null,
-        nextBreak: next ? { unitsToGo: next.minUnits - pool.totalUnits, unitPriceUsdc: next.unitPrice.toString() } : null,
+        nextBreak: next ? { minUnits: next.minUnits, unitsToGo: next.minUnits - pool.totalUnits, unitPriceUsdc: next.unitPrice.toString() } : null,
         tiersUsdc: tiers.map((t) => ({ minUnits: t.minUnits, unitPrice: t.unitPrice.toString() })),
         finalUnitPriceUsdc: pool.finalUnitPrice ? toStroops(pool.finalUnitPrice.toString()).toString() : null, escrowBalanceUsdc: toStroops(pool.escrowBalance.toString()).toString(), // stroops, like every other *Usdc field here
         offer: offer ? publicOffer(offer) : null,
         trustMessage: 'Your money is held safely. The supplier is paid only after the goods arrive. If the group does not fill, you get everything back automatically.',
       },
     };
+  }
+
+  private async poolCards(rows: Prisma.PoolGetPayload<object>[]) {
+    const ids = rows.map((p) => p.id);
+    const [offers, counts, rate] = await Promise.all([
+      this.s.prisma.offer.findMany({ where: { id: { in: [...new Set(rows.map((p) => p.offerId))] } } }),
+      this.s.prisma.commitment.groupBy({ by: ['poolId'], where: { poolId: { in: ids }, units: { gt: 0 } }, _count: { _all: true } }),
+      this.latestRate(),
+    ]);
+    const offerById = new Map(offers.map((o) => [o.id, o]));
+    const membersById = new Map(counts.map((c) => [c.poolId, c._count._all]));
+    return rows.map((p) => {
+      const offer = offerById.get(p.offerId);
+      const tiers = offer ? tiersUsdcFromJson(offer.tiersUsdc) : [];
+      const first = tiers[0];
+      const price = first ? ceilingPrice(tiers, p.totalUnits) : 0n;
+      return {
+        id: p.id.toString(), state: p.state, organizer: p.organizerAddress, supplier: p.supplierAddress, shareSlug: p.shareSlug,
+        offerId: p.offerId, totalUnits: p.totalUnits, moq: offer?.moq ?? null,
+        members: membersById.get(p.id) ?? 0, progressPct: offer && offer.moq > 0 ? Math.min(100, Math.floor((p.totalUnits * 100) / offer.moq)) : 0,
+        fillDeadline: p.fillDeadline, title: offer?.title ?? null, unitLabel: offer?.unitLabel ?? null,
+        currentUnitPriceNaira: rate ? naira(((price * BigInt(Math.round(rate * 1e6))) / 10_000_000n / 1_000_000n)) : null,
+        hub: p.hubAddress, category: p.category, deliveryState: p.deliveryState, deliveryLga: p.deliveryLga, cluster: p.cluster,
+      };
+    });
   }
 
   @Get('pools/:id')
@@ -103,28 +137,43 @@ export class PoolsController {
 
   /** Public preview used by WhatsApp links. */
   @Public() @Get('p/:slug') @Header('Cache-Control', CACHE_CONTROL.livePreview)
-  async preview(@Param('slug') slug: string) {
-    const pool = await this.s.prisma.pool.findUnique({ where: { shareSlug: slug } });
-    if (!pool) throw new NotFoundException('pool not found');
-    return (await this.poolView(pool.id)).view;
+  async preview(@Param('slug') slug: string): Promise<PreviewView> {
+    const current = await this.s.prisma.pool.findUnique({ where: { shareSlug: slug }, select: { id: true, lastEventLedger: true } });
+    if (!current) {
+      this.s.previewCache.evictSlug(slug);
+      throw new NotFoundException('pool not found');
+    }
+    const hit = this.s.previewCache.get(slug);
+    if (hit && hit.poolId === current.id && hit.ledger === current.lastEventLedger) return hit.value as PreviewView;
+    const { pool, view } = await this.poolView(current.id);
+    this.s.previewCache.set(slug, view, pool.id, pool.lastEventLedger);
+    return view;
   }
 
-  @Get('pools')
-  async list(@CurrentUser() u: AuthedUser, @Query() q: Record<string, string | undefined>) {
-    const wallet = (await this.s.prisma.user.findUnique({ where: { id: u.id } }))?.walletAddress;
-    let where: Prisma.PoolWhereInput = { state: q.state ?? 'Open' };
+  @Public() @Get('pools')
+  async list(@CurrentUser() u: AuthedUser | undefined, @Res({ passthrough: true }) res: Response, @Query() query: Record<string, string | undefined>) {
+    const q = parse(poolListQuery, query ?? {});
+    const wallet = u ? (await this.s.prisma.user.findUnique({ where: { id: u.id }, select: { walletAddress: true } }))?.walletAddress : undefined;
+    const conditions: Prisma.PoolWhereInput[] = [];
+    if (!u) conditions.push({ state: { in: [...PUBLIC_POOL_STATES] } });
+    else if (!q.state && q.mine !== 'true') conditions.push({ state: 'Open' });
+    if (q.state) conditions.push({ state: q.state });
+    if (q.category) conditions.push({ category: q.category });
+    if (q.deliveryState) conditions.push({ deliveryState: q.deliveryState });
+    if (q.lga) conditions.push({ deliveryLga: q.lga });
+    if (q.cluster) conditions.push({ cluster: q.cluster });
     if (q.mine === 'true') {
       if (!wallet) return [];
       const joined = (await this.s.prisma.commitment.findMany({ where: { memberAddress: wallet, units: { gt: 0 } }, select: { poolId: true } })).map((c) => c.poolId);
-      where = { OR: [{ organizerAddress: wallet }, { supplierAddress: wallet }, { id: { in: joined } }] };
+      conditions.push({ OR: [{ organizerAddress: wallet }, { supplierAddress: wallet }, { id: { in: joined } }] });
     }
-    const rows = await this.s.prisma.pool.findMany({ where, orderBy: { id: 'desc' }, take: 100 });
-    const cards = await Promise.all(rows.map(async (p) => {
-      const { view } = await this.poolView(p.id);
-      return { id: view.id, state: view.state, organizer: view.organizer, supplier: view.supplier, shareSlug: view.shareSlug, offerId: view.offerId, totalUnits: view.totalUnits, moq: view.moq, progressPct: view.progressPct,
-        fillDeadline: view.fillDeadline, title: view.offer?.title ?? null, unitLabel: view.offer?.unitLabel ?? null, currentUnitPriceNaira: view.currentUnitPriceNaira, hub: view.hub.address };
-    }));
-    return cards;
+    const rows = await this.s.prisma.pool.findMany({
+      where: { AND: conditions }, orderBy: { id: 'desc' }, take: q.limit + 1,
+      ...(q.cursor ? { cursor: { id: BigInt(q.cursor) }, skip: 1 } : {}),
+    });
+    const page = rows.slice(0, q.limit);
+    if (rows.length > q.limit) res.setHeader('X-Next-Cursor', page[page.length - 1]!.id.toString());
+    return this.poolCards(page);
   }
 
   @Get('pools/:id/quote')
@@ -138,7 +187,7 @@ export class PoolsController {
     return {
       units: n, amountNowUsdc: q.amountNow.toString(), amountNowDisplay: formatUsdc(q.amountNow), amountNowNairaEstimate: ngn(q.amountNow),
       currentUnitPriceUsdc: q.currentUnitPrice.toString(), expectedRefundIfClosedNowUsdc: q.expectedRefundIfClosedNow.toString(),
-      nextBreak: q.nextBreak ? { unitsToGo: q.nextBreak.unitsToGo, unitPriceUsdc: q.nextBreak.unitPrice.toString() } : null,
+      nextBreak: q.nextBreak ? { minUnits: q.nextBreak.minUnits, unitsToGo: q.nextBreak.unitsToGo, unitPriceUsdc: q.nextBreak.unitPrice.toString() } : null,
       note: 'Naira amounts are indicative. You pay the current tier price now; if the pool reaches a better tier you are refunded the difference automatically.',
     };
   }
@@ -159,6 +208,32 @@ export class PoolsController {
     }, q.variant, q.lang === 'pcm' ? 'PCM' : 'EN'));
   }
 
+  private async assertCommitCaps(userId: string, wallet: string, poolId: bigint, units: number): Promise<void> {
+    const [pool, role, rep] = await Promise.all([
+      this.s.prisma.pool.findUnique({ where: { id: poolId } }),
+      this.s.prisma.userRole.findUnique({ where: { userId_role: { userId, role: 'TRADER' } }, select: { level: true } }),
+      this.s.prisma.reputationTier.findUnique({ where: { subject_role: { subject: wallet, role: 'Trader' } }, select: { tier: true } }),
+    ]);
+    if (!pool) return;
+    const offer = await this.s.prisma.offer.findUnique({ where: { id: pool.offerId } });
+    if (!offer) return;
+    const tiers = tiersUsdcFromJson(offer.tiersUsdc);
+    if (!tiers.length) return;
+    const [commitment, memberCount, listedMembers] = await Promise.all([
+      this.s.prisma.commitment.findUnique({ where: { poolId_memberAddress: { poolId, memberAddress: wallet } } }),
+      this.s.prisma.commitment.count({ where: { poolId, units: { gt: 0 } } }),
+      this.s.prisma.commitment.count({ where: { poolId } }),
+    ]);
+    const failure = validateCommitCaps({
+      tiers, poolTotalUnits: pool.totalUnits, maxPerMember: offer.maxPerMember, maxUnits: offer.maxUnits,
+      maxMemberShareBp: this.s.env.COMMIT_MAX_MEMBER_SHARE_BP, maxMembersPerPool: this.s.env.COMMIT_MAX_MEMBERS_PER_POOL,
+      traderTierCaps: this.s.env.COMMIT_TRADER_TIER_CAPS_STROOPS.split(',').map((x) => BigInt(x.trim())),
+      memberUnits: commitment?.units ?? 0, memberPaid: commitment ? toStroops(commitment.paid.toString()) : 0n,
+      memberCount, listedMembers, isListed: !!commitment, registryLevel: role?.level ?? 0, reputationTier: rep?.tier ?? 0, units,
+    });
+    if (failure) throw new BadRequestException(failure);
+  }
+
   /** Thin wrappers that turn one user intent into a contract call; the contract enforces every rule. */
   @Post('pools/:id/:action/prepare')
   async act(@CurrentUser() u: AuthedUser, @Param('id') id: string, @Param('action') action: string, @Body() body: unknown) {
@@ -169,6 +244,7 @@ export class PoolsController {
       case 'commit': {
         const b = parse(commitBody, body);
         if (b.method === 'NGN') throw new BadRequestException({ error: 'NOT_IMPLEMENTED', message: 'Naira payments arrive with the anchor integration' });
+        await this.assertCommitCaps(u.id, me, poolId, b.units);
         return prepareAction(this.s, 'group_buy', 'commit', A.commit(me, poolId, b.units));
       }
       case 'increase': return prepareAction(this.s, 'group_buy', 'increase', A.commit(me, poolId, units()));
