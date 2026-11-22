@@ -34,7 +34,7 @@ export function instanceAndCodeKeys(d: Deployments, wallets: string[] = [], bond
 
 export interface TtlStatus {
   contract: string;
-  kind: 'instance' | 'code';
+  kind: TtlKey['kind'];
   remaining: number | null; // null = entry not found (archived or wrong hash): page someone
 }
 
@@ -85,8 +85,8 @@ export function disputeDataKeys(disputeContractId: string, disputeIds: bigint[])
     kind: 'data' as const,
     key: xdr.LedgerKey.contractData(new xdr.LedgerKeyContractData({
       contract: new Contract(disputeContractId).address().toScAddress(),
-      key: xdr.ScVal.scvU64(xdr.Uint64.fromNumber(Number(id))),
-      durability: xdr.ContractDataDurability.persistent(),
+      key: xdr.ScVal.scvU64(xdr.Uint64(id)),
+      durability: xdr.ContractDataDurability.persistent,
     })),
   }));
 }

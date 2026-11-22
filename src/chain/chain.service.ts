@@ -19,7 +19,7 @@ const SIM_FEE_MARGIN_PERCENT = 20;
 const RESOURCE_RETRY_ATTEMPTS = 2;
 
 /** Stellar result codes that indicate a resource limit was exceeded (safe to re-simulate). */
-const RESOURCE_LIMIT_CODES = new Set(['txSOROBAN_INVALID', 'txRESOURCE_FEE_TOO_LOW', 'txINSUFFICIENT_FEE']);
+const RESOURCE_LIMIT_CODES = new Set(['txSorobanInvalid', 'txInsufficientFee']);
 
 export interface PreparedTx {
   txXdr: string;
@@ -267,7 +267,7 @@ export class ChainService {
     signed.sign(this.o.sponsor);
     const sent = await this.server.sendTransaction(signed);
     if (sent.status === 'ERROR') {
-      const code = sent.errorResult?.result().switch().name ?? '';
+      const code = sent.errorResult?.result.type ?? '';
       if (retriesLeft > 0 && RESOURCE_LIMIT_CODES.has(code)) {
         // Re-simulate with fresh ledger state to get updated resource requirements.
         const op = tx.operations[0] as Operation.InvokeHostFunction;

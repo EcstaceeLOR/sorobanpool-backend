@@ -29,7 +29,6 @@ describe('pool stream (SSE)', () => {
   let base: string;
   beforeAll(async () => {
     h = await startHarness();
-    await h.app.listen(0, '127.0.0.1');
     base = (await h.app.getUrl()).replace('[::1]', '127.0.0.1');
   });
   afterAll(async () => { await h.close(); });

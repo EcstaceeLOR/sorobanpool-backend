@@ -138,7 +138,7 @@ export async function expireStaleAnchorTransfers(
   const expiredCount = await prisma.anchorTransfer.updateMany({
     where: {
       status: 'PENDING',
-      createdAt: { lt: cutoff },
+      createdAt: { lte: cutoff },
     },
     data: {
       status: 'EXPIRED',

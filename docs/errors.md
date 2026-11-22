@@ -31,7 +31,7 @@ with the contract artifacts.
 | `INTERNAL` | 500 | Unexpected failure; it has been reported. | Retry later; contact support if it persists. |
 
 Framework exceptions raised with a plain string (for example `NotFoundException('pool not found')`,
-`UnauthorizedException('missing bearer token')`, `ForbiddenException('insufficient role')`) arrive in NestJS's
+`UnauthorizedException('missing or invalid bearer token')`, `ForbiddenException('insufficient role')`) arrive in NestJS's
 default shape, `{statusCode, message, error}`, where `error` is the status text (`Bad Request`, `Unauthorized`,
 `Forbidden`, `Not Found`). Treat them by status.
 
@@ -90,6 +90,13 @@ default shape, `{statusCode, message, error}`, where `error` is the status text 
 | `EXPIRED` | 400 | The offer's `validUntil` is in the past. | Choose a new validity date. |
 | `BAD_VALIDITY` | 400 | `validUntil` must be within 14 days. | Choose an earlier date. |
 | `BAD_STATE` | 400 | The offer or naira transfer is not in a state that allows this action. | Refresh and check the state. |
+| `NOT_READY` | 503 | A readiness check failed; the body lists `failing` services. | Retry after the dependency recovers. |
+| `PAYLOAD_TOO_LARGE` | 413 | The JSON or upload body exceeds the configured limit. | Reduce the body size and retry. |
+| `OVER_MEMBER_LIMIT` | 400 | The commit would exceed the pool's per-member unit cap. The body carries `limit` and `contractCode: 315`. | Reduce the quantity. |
+| `OVER_MEMBER_SHARE` | 400 | The commit would exceed the 50% member share cap once others have joined. The body carries `limit` and `contractCode: 316`. | Reduce the quantity. |
+| `OVER_POOL_MAX` | 400 | The pool has fewer units remaining than this commit. The body carries `limit` and `contractCode: 317`. | Reduce the quantity. |
+| `TOO_MANY_MEMBERS` | 400 | The pool already has its maximum number of members. The body carries `limit` and `contractCode: 319`. | Choose another pool. |
+| `OVER_TIER_CAP` | 400 | The commit would exceed the member's verification-tier USDC cap. The body carries `limit` (stroops) and `contractCode: 318`. | Reduce the quantity or complete verification. |
 | `KYB_REQUIRED` | 403 | Only verified suppliers can publish offers. | Finish supplier verification. |
 | `FX_DIVERGENCE` | 400 | The naira rate sources disagree too much to price the offer. | Retry in a few minutes. |
 | `NO_CLUSTER` | 400 | A market-only pool needs the organizer's market set first. | Set the market with `PUT /me/profile`. |
@@ -105,6 +112,7 @@ default shape, `{statusCode, message, error}`, where `error` is the status text 
 |---|---|---|---|
 | `AMOUNT_OUT_OF_RANGE` | 400 | The naira amount is outside the anchor's limits. | Choose a different amount. |
 | `FX_UNAVAILABLE` | 503 | No usable naira rate right now. | Retry later. |
+| `QUOTE_EXPIRED` | 400 | The naira quote expired before the deposit was confirmed. | Request a fresh quote. |
 
 ## Development server only
 

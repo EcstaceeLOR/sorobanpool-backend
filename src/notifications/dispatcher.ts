@@ -162,7 +162,7 @@ export async function queueOfferExpiryWarnings(db: Db, now: Date): Promise<numbe
   for (const offer of offers) {
     const claimed = await db.offer.updateMany({ where: { id: offer.id, expiryWarnedAt: null }, data: { expiryWarnedAt: now } });
     if (claimed.count === 0) continue;
-    const supplier = await db.user.findFirst({ where: { walletAddress: offer.supplierAddress } });
+    const supplier = await db.user.findUnique({ where: { id: offer.supplierId } });
     if (!supplier) continue;
     const hours = Math.max(1, Math.ceil((offer.validUntil.getTime() - now.getTime()) / 3_600_000));
     await enqueue(db, supplier.id, 'offer_expiry_warning', { product: offer.title, hours }, now);

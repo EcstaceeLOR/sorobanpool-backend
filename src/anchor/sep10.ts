@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { TransactionBuilder, Networks, Transaction, FeeBumpTransaction, Keypair, BaseTransaction } from '@stellar/stellar-sdk';
+import { TransactionBuilder, Transaction, FeeBumpTransaction, Keypair } from '@stellar/stellar-sdk';
 
 const challengeResponseSchema = z.object({
   transaction: z.string(),
@@ -64,11 +64,11 @@ export class Sep10Client {
       const data = await response.json();
       const parsed = challengeResponseSchema.parse(data);
 
-      this.validateChallenge(parsed.transaction, parsed.networkPassphrase, wallet);
+      this.validateChallenge(parsed.transaction, parsed.network_passphrase, wallet);
 
       return {
         transaction: parsed.transaction,
-        networkPassphrase: parsed.networkPassphrase,
+        networkPassphrase: parsed.network_passphrase,
       };
     } finally {
       clearTimeout(timeoutId);
@@ -78,7 +78,7 @@ export class Sep10Client {
   private validateChallenge(transactionXdr: string, networkPassphrase: string, expectedWallet: string): void {
     try {
       const tx = TransactionBuilder.fromXDR(transactionXdr, networkPassphrase);
-      const baseTx = tx instanceof FeeBumpTransaction ? tx.innerTransaction : tx;
+      const baseTx: Transaction = tx instanceof FeeBumpTransaction ? tx.innerTransaction : tx;
 
       // Verify source account
       if (baseTx.source !== this.clientKeypair.publicKey()) {
@@ -99,16 +99,16 @@ export class Sep10Client {
       }
 
       // Verify timebounds
-      if (!baseTx.timebounds) {
+      if (!baseTx.timeBounds) {
         throw new Sep10Error('VALIDATION_FAILED', 'Challenge does not have timebounds');
       }
 
       const now = Math.floor(Date.now() / 1000);
-      if (baseTx.timebounds.minTime && now < baseTx.timebounds.minTime) {
+      if (baseTx.timeBounds.minTime && now < Number(baseTx.timeBounds.minTime)) {
         throw new Sep10Error('VALIDATION_FAILED', 'Challenge is not yet valid');
       }
 
-      if (baseTx.timebounds.maxTime && now > baseTx.timebounds.maxTime) {
+      if (baseTx.timeBounds.maxTime && now > Number(baseTx.timeBounds.maxTime)) {
         throw new Sep10Error('VALIDATION_FAILED', 'Challenge has expired');
       }
     } catch (e) {
