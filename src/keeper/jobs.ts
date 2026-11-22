@@ -92,12 +92,30 @@ export function dueActions(
   return out;
 }
 
+/** Error class returned by classifyKeeperError. */
+export type KeeperErrorKind = 'refused' | 'transient' | 'permanent';
+
+/**
+ * Classifies a keeper error (#93):
+ *   refused  — contract rejected the call (expected, harmless)
+ *   transient — RPC timeout / rate limit / network hiccup (worth retrying)
+ *   permanent — anything else (alert, do not retry)
+ */
+export function classifyKeeperError(e: unknown): KeeperErrorKind {
+  const msg = (e as Error)?.message ?? '';
+  if (/Error\(Contract, #\d+\)/.test(msg)) return 'refused';
+  if (/ETIMEDOUT|ECONNREFUSED|ECONNRESET|TooManyRequests|429|503|504|timeout/i.test(msg)) return 'transient';
+  return 'permanent';
+}
+
 export interface ChainPort {
   /** Invokes a keeper-callable function; resolves true on success, false if the chain refused. */
   invoke(action: KeeperAction): Promise<boolean>;
 }
 
-/** Runs the due actions; one failing action never blocks the rest. */
+const TRANSIENT_BACKOFF_MS = [1_000, 3_000, 9_000] as const;
+
+/** Runs the due actions; one failing action never blocks the rest (#93 retry). */
 export async function runKeeper(
   chain: ChainPort,
   actions: readonly KeeperAction[],
@@ -105,12 +123,21 @@ export async function runKeeper(
 ): Promise<{ ok: number; refused: number; errored: number }> {
   const r = { ok: 0, refused: 0, errored: 0 };
   for (const a of actions) {
-    try {
-      if (await chain.invoke(a)) r.ok++;
-      else r.refused++;
-    } catch (e) {
+    let lastErr: unknown;
+    let success = false;
+    for (let attempt = 0; attempt <= TRANSIENT_BACKOFF_MS.length; attempt++) {
+      try {
+        if (await chain.invoke(a)) { r.ok++; success = true; break; }
+        r.refused++; success = true; break;
+      } catch (e) {
+        const kind = classifyKeeperError(e);
+        if (kind !== 'transient' || attempt === TRANSIENT_BACKOFF_MS.length) { lastErr = e; break; }
+        await new Promise<void>((res) => setTimeout(res, TRANSIENT_BACKOFF_MS[attempt]));
+      }
+    }
+    if (!success) {
       r.errored++;
-      onError(a, e);
+      onError(a, lastErr);
     }
   }
   return r;
