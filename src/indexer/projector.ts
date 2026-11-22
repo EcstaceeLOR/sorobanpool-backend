@@ -1,5 +1,5 @@
 import type { DecodedEvent } from './decode.js';
-import type { PoolRow, PoolState, ReadStore } from './read-model.js';
+import { activityFromEvent, type PoolRow, type PoolState, type ReadStore } from './read-model.js';
 
 type Handler = (ev: DecodedEvent, s: ReadStore) => Promise<void>;
 
@@ -168,7 +168,11 @@ export class Projector {
       if (await s.markProcessed(ev.id, { ledger: ev.ledger, contract: ev.contract, topic: ev.event })) return false;
       await handler(ev, s);
       const p = ev.contract === 'group_buy' ? await s.pool(BigInt(ev.key as bigint)) : undefined;
-      if (p) await s.savePool({ ...p, lastEventLedger: Math.max(p.lastEventLedger, ev.ledger) });
+      if (p) {
+        await s.savePool({ ...p, lastEventLedger: Math.max(p.lastEventLedger, ev.ledger) });
+        const activity = activityFromEvent(ev);
+        if (activity) await s.saveActivity({ ...activity, poolId: p.id });
+      }
       return true;
     });
   }

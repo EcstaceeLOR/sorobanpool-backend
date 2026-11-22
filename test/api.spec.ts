@@ -311,6 +311,84 @@ describe('pools', () => {
     expect(second.body.map((r: { id: string }) => r.id)).toEqual([(id0 + 1n).toString()]);
     expect(second.headers['x-next-cursor']).toBeUndefined();
   });
+
+  describe('pool activity feed (#79)', () => {
+    let poolId: bigint;
+    let organizerToken: string;
+    let member: string;
+    let proj: Projector;
+    let base: number;
+
+    beforeAll(async () => {
+      const p = await livePool();
+      organizerToken = p.orgToken;
+      const offer = await h.db.prisma.offer.findUniqueOrThrow({ where: { id: p.offerId } });
+      const supplier = (await h.db.prisma.user.findUniqueOrThrow({ where: { id: offer.supplierId } })).walletAddress!;
+      proj = new Projector(new PrismaReadStore(h.db.prisma));
+      poolId = BigInt(Date.now()) * 1_000n + BigInt(phoneN++);
+      member = Keypair.random().publicKey();
+      base = 100;
+      const apply = (r: ReturnType<typeof raw>) => proj.apply(decodeEvent(r)!);
+      await apply(raw('group_buy', 'pool_new', u64(poolId), tup(a(p.orgKp.publicKey()), a(supplier), bytes(7), nativeToScVal(Buffer.from(p.prep.hubHash, 'hex'))), base));
+      await apply(raw('group_buy', 'committed', u64(poolId), tup(a(member), u32(10), i128(1_000_000_000n)), base + 1));
+      await apply(raw('group_buy', 'tier_up', u64(poolId), tup(u32(1)), base + 2));
+      await apply(raw('group_buy', 'filled', u64(poolId), tup(u32(120), i128(1_000_000n)), base + 3));
+      await apply(raw('group_buy', 'dispatch', u64(poolId), tup(), base + 4));
+    });
+
+    const types = (body: { events: { type: string }[] }) => body.events.map((e) => e.type);
+
+    it('returns events newest first and pages with a cursor that survives new events', async () => {
+      const url = `/v1/pools/${poolId}/activity`;
+      const first = await h.http().get(`${url}?limit=2`).set(auth(organizerToken)).expect(200);
+      expect(types(first.body)).toEqual(['dispatched', 'filled']);
+      expect(first.body.nextCursor).toBe(first.headers['x-next-cursor']);
+      const cursor = first.body.nextCursor as string;
+
+      await proj.apply(decodeEvent(raw('group_buy', 'accepted', u64(poolId), tup(), base + 5))!);
+      const second = await h.http().get(`${url}?limit=2&cursor=${cursor}`).set(auth(organizerToken)).expect(200);
+      expect(types(second.body)).toEqual(['price_break', 'joined']);
+      const third = await h.http().get(`${url}?limit=2&cursor=${second.body.nextCursor}`).set(auth(organizerToken)).expect(200);
+      expect(types(third.body)).toEqual(['created']);
+      expect(third.body.nextCursor).toBeNull();
+      expect(third.headers['x-next-cursor']).toBeUndefined();
+    });
+
+    it('redacts actor addresses and never returns raw event payloads', async () => {
+      const feed = await h.http().get(`/v1/pools/${poolId}/activity`).set(auth(organizerToken)).expect(200);
+      const joined = feed.body.events.find((e: { type: string }) => e.type === 'joined');
+      expect(joined.actor).toBe(`${member.slice(0, 4)}…${member.slice(-4)}`);
+      expect(JSON.stringify(feed.body)).not.toContain(member);
+      expect(joined).not.toHaveProperty('payload');
+      expect(joined).not.toHaveProperty('member');
+    });
+
+    it('shows only aggregate events to the public, and member events to participants', async () => {
+      const url = `/v1/pools/${poolId}/activity`;
+      const anon = await h.http().get(url).expect(200);
+      expect(types(anon.body)).toEqual(expect.arrayContaining(['price_break', 'filled', 'dispatched']));
+      expect(types(anon.body)).not.toContain('joined');
+      expect(JSON.stringify(anon.body)).not.toContain(member);
+
+      const stranger = await h.login(newPhone());
+      expect(types((await h.http().get(url).set(auth(stranger.token)).expect(200)).body)).not.toContain('joined');
+
+      const memberUser = await h.login(newPhone());
+      const memberKp = Keypair.random();
+      await h.bindWallet(memberUser.token, memberKp);
+      await proj.apply(decodeEvent(raw('group_buy', 'committed', u64(poolId), tup(a(memberKp.publicKey()), u32(2), i128(100_000_000n)), base + 6))!);
+      const mine = (await h.http().get(url).set(auth(memberUser.token)).expect(200)).body.events.find((e: { type: string }) => e.type === 'joined');
+      expect(mine.actor).toBe(`${memberKp.publicKey().slice(0, 4)}…${memberKp.publicKey().slice(-4)}`);
+    });
+
+    it('validates the pool id, limit and cursor', async () => {
+      await h.http().get(`/v1/pools/${poolId}/activity?limit=0`).expect(400);
+      await h.http().get(`/v1/pools/${poolId}/activity?limit=101`).expect(400);
+      await h.http().get(`/v1/pools/${poolId}/activity?cursor=nope`).expect(400);
+      await h.http().get('/v1/pools/not-a-number/activity').expect(400);
+      await h.http().get('/v1/pools/999999999/activity').expect(404);
+    });
+  });
 });
 
 describe('commit pre-sign caps', () => {

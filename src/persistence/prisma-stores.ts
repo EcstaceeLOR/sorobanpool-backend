@@ -4,7 +4,7 @@ import { formatUsdc, toStroops } from '../common/money.js';
 import { ceilingPrice, type Tier } from '../pools/pricing.js';
 import type { RawEvent } from '../indexer/decode.js';
 import type { CursorStore, EventSink } from '../indexer/indexer.service.js';
-import type { BondRow, CommitmentRow, DisputeRow, PoolRow, PoolState, ReadStore, ReputationTierRow } from '../indexer/read-model.js';
+import type { ActivityEventRow, BondRow, CommitmentRow, DisputeRow, PoolRow, PoolState, ReadStore, ReputationTierRow } from '../indexer/read-model.js';
 import type { OtpRecord, OtpStore } from '../auth/otp.service.js';
 import type { SessionRecord, SessionStore } from '../auth/token.service.js';
 import type { UsageStore } from '../relayer/allowlist.js';
@@ -247,6 +247,15 @@ export class PrismaReadStore implements ReadStore {
       where: { subject_role: { subject: r.subject, role: r.role } },
       create: { subject: r.subject, role: r.role, tier: r.tier },
       update: { tier: r.tier },
+    });
+  }
+
+  async saveActivity(r: ActivityEventRow): Promise<void> {
+    await this.db.poolActivity.create({
+      data: {
+        poolId: r.poolId, type: r.type, actor: r.actor ?? null, units: r.units ?? null, tier: r.tier ?? null,
+        ledger: r.ledger, occurredAt: r.occurredAt, aggregate: r.aggregate,
+      },
     });
   }
 }

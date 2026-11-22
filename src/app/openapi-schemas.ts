@@ -96,6 +96,28 @@ export const API_SCHEMAS: Record<string, JsonSchema> = {
     },
     required: ['units', 'amountNowUsdc', 'amountNowDisplay', 'currentUnitPriceUsdc', 'expectedRefundIfClosedNowUsdc', 'nextBreak', 'note'],
   },
+  PoolActivityEvent: {
+    type: 'object',
+    properties: {
+      id: { type: 'string', description: 'Stable keyset cursor for this event' },
+      type: { type: 'string', description: 'created | joined | increased | left | price_break | filled | dispatched | ...' },
+      message: { type: 'string', description: 'Plain-language description, never containing a full address' },
+      at: { type: 'string', format: 'date-time' },
+      ledger: { type: 'integer' },
+      actor: { type: 'string', description: 'Truncated address, present only on member events visible to participants' },
+      units: { type: 'integer' },
+      tier: { type: 'integer' },
+    },
+    required: ['id', 'type', 'message', 'at', 'ledger'],
+  },
+  PoolActivityFeed: {
+    type: 'object',
+    properties: {
+      events: { type: 'array', items: { $ref: '#/components/schemas/PoolActivityEvent' } },
+      nextCursor: { type: ['string', 'null'], description: 'Pass as ?cursor= for the next page; also returned as X-Next-Cursor' },
+    },
+    required: ['events', 'nextCursor'],
+  },
   FxQuote: {
     type: 'object',
     properties: { ngnPerUsd: { type: 'number' }, sources: { type: 'integer' }, at: { type: 'string', format: 'date-time' }, ttlSeconds: { type: 'integer' } },
@@ -138,6 +160,7 @@ export const OPERATION_BODIES: Record<string, { request?: JsonSchema; response?:
   'AuthController.logout': { request: { $ref: '#/components/schemas/RefreshRequest' } },
   'PoolsController.list': { response: { type: 'array', items: { $ref: '#/components/schemas/PoolCard' } } },
   'PoolsController.quote': { response: { $ref: '#/components/schemas/PoolQuote' } },
+  'PoolsController.activity': { response: { $ref: '#/components/schemas/PoolActivityFeed' } },
   'CatalogController.fxQuote': { response: { $ref: '#/components/schemas/FxQuote' } },
   'CatalogController.list': { response: { type: 'array', items: { $ref: '#/components/schemas/PublicOffer' } } },
   'CatalogController.one': { response: { $ref: '#/components/schemas/PublicOffer' } },

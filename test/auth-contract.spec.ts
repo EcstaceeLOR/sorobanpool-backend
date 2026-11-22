@@ -33,6 +33,7 @@ const PUBLIC_ROUTES = new Set([
   'GET /v1/openapi.json',
   'GET /v1/p/{slug}',
   'GET /v1/pools',
+  'GET /v1/pools/{id}/activity',
   'GET /v1/pools/{id}/sharecard.png',
   'GET /v1/pools/{id}/stream',
   'PUT /v1/uploads/put',

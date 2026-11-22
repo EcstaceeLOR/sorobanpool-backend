@@ -212,6 +212,21 @@ model Pool {
   @@index([escrowBalance])
 }
 
+/// Activity feed entries written by the projector. Full actor addresses stay here; the API redacts them (#79).
+model PoolActivity {
+  seq        Int      @id @default(autoincrement())
+  poolId     BigInt
+  type       String
+  actor      String?
+  units      Int?
+  tier       Int?
+  ledger     Int
+  occurredAt DateTime
+  aggregate  Boolean  @default(false)
+
+  @@index([poolId, seq])
+}
+
 model Commitment {
   poolId         BigInt
   memberAddress  String

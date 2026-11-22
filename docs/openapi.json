@@ -300,6 +300,69 @@
           "note"
         ]
       },
+      "PoolActivityEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable keyset cursor for this event"
+          },
+          "type": {
+            "type": "string",
+            "description": "created | joined | increased | left | price_break | filled | dispatched | ..."
+          },
+          "message": {
+            "type": "string",
+            "description": "Plain-language description, never containing a full address"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ledger": {
+            "type": "integer"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Truncated address, present only on member events visible to participants"
+          },
+          "units": {
+            "type": "integer"
+          },
+          "tier": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "message",
+          "at",
+          "ledger"
+        ]
+      },
+      "PoolActivityFeed": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PoolActivityEvent"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as ?cursor= for the next page; also returned as X-Next-Cursor"
+          }
+        },
+        "required": [
+          "events",
+          "nextCursor"
+        ]
+      },
       "FxQuote": {
         "type": "object",
         "properties": {
@@ -2572,6 +2635,43 @@
                   "validUntilLedger": 1234567,
                   "contract": "group_buy",
                   "fn": "commit"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
+    "/v1/pools/{id}/activity": {
+      "get": {
+        "operationId": "PoolsController.activity",
+        "tags": [
+          "Pools"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolActivityFeed"
                 }
               }
             }

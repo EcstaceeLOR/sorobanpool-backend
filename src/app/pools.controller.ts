@@ -6,6 +6,7 @@ import { A } from '../chain/args.js';
 import { canonicalJson, sha256Hex } from '../common/canonical-json.js';
 import { formatUsdc, toStroops } from '../common/money.js';
 import { unitLabelHash } from '../catalog/offer.js';
+import { activityView } from '../indexer/read-model.js';
 import { quote as priceQuote, ceilingPrice, tierIndex, validateCommitCaps } from '../pools/pricing.js';
 import { renderShareCard } from '../sharecards/sharecard.js';
 import { tiersUsdcFromJson, publicOffer } from './catalog.controller.js';
@@ -27,6 +28,10 @@ export const poolListQuery = z.object({
   state: z.string().max(30).optional(), category: z.string().max(60).optional(), deliveryState: z.string().max(60).optional(),
   lga: z.string().max(60).optional(), cluster: z.string().max(30).optional(), cursor: z.string().regex(/^\d+$/).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(20), mine: z.enum(['true', 'false']).default('false'),
+});
+export const poolActivityQuery = z.object({
+  cursor: z.coerce.number().int().positive().optional(),
+  limit: z.coerce.number().int().min(1).max(100).default(20),
 });
 
 const PUBLIC_POOL_STATES = ['Open'];
@@ -174,6 +179,47 @@ export class PoolsController {
     const page = rows.slice(0, q.limit);
     if (rows.length > q.limit) res.setHeader('X-Next-Cursor', page[page.length - 1]!.id.toString());
     return this.poolCards(page);
+  }
+
+  /** Last indexed events, newest first. Keyset pagination keeps pages stable as new events arrive (#79). */
+  @Public() @Get('pools/:id/activity')
+  async activity(@CurrentUser() u: AuthedUser | undefined, @Param('id') id: string, @Query() query: Record<string, string | undefined>, @Res({ passthrough: true }) res: Response) {
+    if (!/^\d{1,18}$/.test(id)) throw new BadRequestException('invalid pool id');
+    const q = parse(poolActivityQuery, query ?? {});
+    const poolId = BigInt(id);
+    const pool = await this.s.prisma.pool.findUnique({
+      where: { id: poolId },
+      select: { organizerAddress: true, supplierAddress: true, cluster: true },
+    });
+    if (!pool) throw new NotFoundException('pool not found');
+    const wallet = u ? (await this.s.prisma.user.findUnique({ where: { id: u.id }, select: { walletAddress: true } }))?.walletAddress : undefined;
+    const [commitment, profile] = u && wallet
+      ? await Promise.all([
+          this.s.prisma.commitment.findFirst({ where: { poolId, memberAddress: wallet }, select: { poolId: true } }),
+          this.s.prisma.traderProfile.findUnique({ where: { userId: u.id }, select: { cluster: true } }),
+        ])
+      : [null, null];
+    const isParticipant = !!wallet && (wallet === pool.organizerAddress || wallet === pool.supplierAddress || !!commitment);
+    const inCluster = !!u && !!pool.cluster && profile?.cluster === pool.cluster;
+    const rows = await this.s.prisma.poolActivity.findMany({
+      where: {
+        poolId,
+        ...(isParticipant || inCluster ? {} : { aggregate: true }),
+        ...(q.cursor !== undefined ? { seq: { lt: q.cursor } } : {}),
+      },
+      orderBy: { seq: 'desc' },
+      take: q.limit + 1,
+    });
+    const page = rows.slice(0, q.limit);
+    const nextCursor = rows.length > q.limit ? page[page.length - 1]!.seq.toString() : null;
+    if (nextCursor) res.setHeader('X-Next-Cursor', nextCursor);
+    return {
+      events: page.map((r) => activityView({
+        seq: r.seq, poolId: r.poolId, type: r.type, actor: r.actor ?? undefined, units: r.units ?? undefined,
+        tier: r.tier ?? undefined, ledger: r.ledger, occurredAt: r.occurredAt, aggregate: r.aggregate,
+      })),
+      nextCursor,
+    };
   }
 
   @Get('pools/:id/quote')
