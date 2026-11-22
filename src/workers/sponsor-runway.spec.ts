@@ -22,7 +22,7 @@ describe('sponsor runway (#100)', () => {
   });
 
   it('alerts on runway, not on a fixed XLM floor, when there is history', async () => {
-    // 70 transactions over the window at 0.1 XLM each: 10 XLM of spend in 7 days, so about 1 XLM a day.
+    // 70 transactions over the window at 0.1 XLM each: 7 XLM of spend over 7 days, so about 1 XLM a day.
     await spend('2026-10-10', 70);
     const low = await checkSponsorRunway(h.db.prisma, balance(69n * XLM / 10n), NOW, { minXlm: 100, minRunwayDays: 7 });
     expect(low.runwayDays).toBe(6);
