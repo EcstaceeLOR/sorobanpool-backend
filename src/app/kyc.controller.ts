@@ -56,7 +56,7 @@ export class KycController {
       const a = await this.s.attestations.attest(u.id, user.walletAddress, 'Trader', KYC_LEVEL, id.providerRef);
       await this.s.prisma.verificationRecord.update({
         where: { id: record.id },
-        data: { status: 'VERIFIED', result: this.s.pii.seal({ idType: b.idType, idNumber: b.idNumber, claim, checks, salt: a.salt, verHash: a.verHash, tx: a.hash }) as never },
+        data: { status: 'VERIFIED', result: this.s.pii.seal({ idType: b.idType, idNumber: b.idNumber, claim, checks, role: 'Trader', level: KYC_LEVEL, salt: a.salt, verHash: a.verHash, tx: a.hash }) as never },
       });
       await this.s.prisma.userRole.upsert({
         where: { userId_role: { userId: u.id, role: 'TRADER' } }, create: { userId: u.id, role: 'TRADER', level: KYC_LEVEL, verHash: a.verHash }, update: { level: KYC_LEVEL, verHash: a.verHash },

@@ -70,6 +70,8 @@ export const envSchema = z.object({
   /** First ledger for a fresh indexer. Unset = the oldest ledger the RPC still retains (see Indexer StartLedger). */
   /** registry.attest calls allowed per UTC day (brief 7.8 attestor daily cap); alerts at 80%. */
   ATTESTOR_DAILY_CAP: z.coerce.number().int().positive().default(500),
+  /** Spike alert when today's attestations exceed this multiple of the trailing 7-day daily average (#130). */
+  ATTESTOR_SPIKE_MULTIPLE: z.coerce.number().min(1).max(100).default(3),
   INDEXER_START_LEDGER: z.coerce.number().int().positive().optional(),
   /** Ledgers behind the RPC tip at which the indexer alert fires and /health reports `indexer: degraded` (#85). */
   INDEXER_LAG_ALERT_LEDGERS: z.coerce.number().int().positive().default(DEFAULT_INDEXER_LAG_ALERT_LEDGERS),

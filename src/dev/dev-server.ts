@@ -63,8 +63,8 @@ async function main(): Promise<void> {
 
   const prisma = createPrisma(env.DATABASE_URL, 1); // PGlite serves a single connection
   const deployments = loadDeployments(env.DEPLOYMENTS_FILE);
-  const services = buildServices(env, prisma, deployments, { store: new LocalObjectStore(env.EVIDENCE_DIR) });
   const metrics = new Metrics();
+  const services = buildServices(env, prisma, deployments, { store: new LocalObjectStore(env.EVIDENCE_DIR), onAttestorSpike: () => metrics.inc('attestor_spike_alerts_total') });
   const server = new rpc.Server(env.RPC_URL);
   // Start from "now": a fresh in-memory database has no history to replay.
   if (!process.env.INDEXER_START_LEDGER) env.INDEXER_START_LEDGER = (await server.getLatestLedger()).sequence;

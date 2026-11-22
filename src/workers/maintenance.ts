@@ -144,9 +144,10 @@ export interface FxRefreshResult {
 /**
  * `fx-refresh` (brief 7.7, every minute): records the combined NGN/USD rate from all sources, or why it could not be
  * combined. Publishing re-quotes on its own and refuses on divergence; this job gives the history and the alert.
+ * A blocked refresh has no rate to store, so it is written to the audit log (`fx.blocked`) with its sources (#125).
  */
 export async function refreshFx(
-  prisma: Pick<PrismaClient, 'fxQuote'>, fx: { quotes(): Promise<FxSourceQuote[]> }, now: Date,
+  prisma: Pick<PrismaClient, 'fxQuote' | 'auditLog'>, fx: { quotes(): Promise<FxSourceQuote[]> }, now: Date,
 ): Promise<FxRefreshResult> {
   const sources = await fx.quotes();
   try {
@@ -155,7 +156,9 @@ export async function refreshFx(
     return { rate: q.rate, divergence: q.divergence, blocked: false };
   } catch (e) {
     const divergence = e instanceof FxDivergenceError ? e.divergence : null;
-    return { rate: null, divergence, blocked: true, reason: (e as Error).message };
+    const reason = (e as Error).message;
+    await prisma.auditLog.create({ data: { actorId: 'fx-refresh', action: 'fx.blocked', target: 'NGN/USD', data: { divergence, reason, quotes: sources } as never } });
+    return { rate: null, divergence, blocked: true, reason };
   }
 }
 
