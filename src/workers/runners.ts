@@ -14,7 +14,7 @@ import type { Services } from '../app/services.js';
 import { combineQuotes } from '../fx/fx.js';
 import { dispatchDue, NotificationProducer, queueDeadlineReminders } from '../notifications/dispatcher.js';
 import {
-  checkSponsor, expireOffers, expireStaleAnchorTransfers, FINAL_POOL_STATES, MismatchTracker,
+  checkSponsorRunway, expireOffers, expireStaleAnchorTransfers, FINAL_POOL_STATES, MismatchTracker,
   pruneChainEvents, purgeIdempotencyKeys, reconcilePools, refreshFx,
 } from './maintenance.js';
 
@@ -301,8 +301,9 @@ export function startMaintenance(s: Services, intervalMs = 300_000): Runner {
     if (expiredTransfers.expired) console.log(`[maintenance] expired ${expiredTransfers.expired} anchor transfer(s)`);
     const bad = tracker.persistent(await reconcilePools(s.prisma, s.chain as never, A.poolOnly));
     for (const m of bad) console.error(`[reconcile] ALERT pool ${m.poolId} ${m.field}: db=${m.db} chain=${m.chain}`);
-    const h = await checkSponsor(s.chain, s.env.SPONSOR_MIN_XLM);
-    if (h.low) console.error(`[maintenance] ALERT sponsor balance ${Number(h.balanceStroops) / 1e7} XLM is below ${s.env.SPONSOR_MIN_XLM}`);
+    const h = await checkSponsorRunway(s.prisma, s.chain, s.now(), { minXlm: s.env.SPONSOR_MIN_XLM, minRunwayDays: s.env.SPONSOR_MIN_RUNWAY_DAYS });
+    if (h.low && h.runwayDays === null) console.error(`[maintenance] ALERT sponsor balance ${Number(h.balanceStroops) / 1e7} XLM is below ${s.env.SPONSOR_MIN_XLM}`);
+    else if (h.low) console.error(`[maintenance] ALERT sponsor runway ${h.runwayDays} day(s) is below ${h.minRunwayDays}`);
   }, { reporter: s.reporter });
 }
 
