@@ -26,13 +26,21 @@ export interface UsageStore {
   increment(userId: string, day: string): Promise<number>;
 }
 
+/**
+ * Per-function daily cap overrides. Key format: `"<contractName>.<functionName>"`, e.g. `"group_buy.create_pool"`.
+ * Any function not listed here falls back to the global `dailyCap`.
+ */
+export type FunctionCapOverrides = Readonly<Record<string, number>>;
+
 export class SponsorshipPolicy {
   constructor(
     /** contract id -> logical name (config / registry / group_buy ...), from deployments/<network>.json */
     private readonly contractNames: ReadonlyMap<string, string>,
     private readonly usage: UsageStore,
-    private readonly dailyCap = DEFAULT_DAILY_CAP,
+    private readonly dailyCap: number | undefined = DEFAULT_DAILY_CAP,
     private readonly now: () => Date = () => new Date(),
+    /** Optional per-function overrides; takes precedence over `dailyCap`. */
+    private readonly capOverrides: FunctionCapOverrides = {},
   ) {}
 
   check(contractId: string, fn: string): void {
@@ -46,7 +54,8 @@ export class SponsorshipPolicy {
   /** Checks the allow-list, then spends one unit of the user's daily allowance. */
   async authorize(userId: string, contractId: string, fn: string): Promise<void> {
     this.check(contractId, fn);
-    await this.consumeDailyAllowance(userId);
+    const name = this.contractNames.get(contractId);
+    await this.consumeDailyAllowance(userId, name, fn);
   }
 
   /** Allows only registry suspension operations after the caller has been checked as an ADMIN. */
@@ -55,13 +64,19 @@ export class SponsorshipPolicy {
     if (name !== 'registry' || !['suspend', 'unsuspend'].includes(fn)) {
       throw new SponsorshipError('NOT_ALLOWED', `${name ?? contractId}.${fn} is not an allowed admin action`);
     }
-    await this.consumeDailyAllowance(userId);
+    await this.consumeDailyAllowance(userId, name, fn);
   }
 
-  private async consumeDailyAllowance(userId: string): Promise<void> {
+  private async consumeDailyAllowance(userId: string, contractName?: string, fn?: string): Promise<void> {
+    const fnKey = contractName && fn ? `${contractName}.${fn}` : undefined;
+    const cap = (fnKey !== undefined && fnKey in this.capOverrides)
+      ? this.capOverrides[fnKey]!
+      : (this.dailyCap ?? DEFAULT_DAILY_CAP);
     const day = this.now().toISOString().slice(0, 10);
-    const n = await this.usage.increment(userId, day);
-    if (n > this.dailyCap) throw new SponsorshipError('CAP_REACHED', 'Daily free-transaction limit reached');
+    // Use a compound user key so per-function counters are tracked separately from the global counter.
+    const trackingUserId = fnKey ? `${userId}:${fnKey}` : userId;
+    const n = await this.usage.increment(trackingUserId, day);
+    if (n > cap) throw new SponsorshipError('CAP_REACHED', 'Daily free-transaction limit reached');
   }
 }
 
