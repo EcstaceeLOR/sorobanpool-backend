@@ -13,6 +13,7 @@ const labelStr = (l: Record<string, string>) => {
 /** Minimal Prometheus text-format registry: counters and one latency histogram, no dependencies. */
 export class Metrics {
   private readonly counters = new Map<string, Map<string, number>>();
+  private readonly labeledGauges = new Map<string, Map<string, number>>();
   private readonly hist = new Map<string, { buckets: number[]; sum: number; count: number }>();
 
   inc(name: string, labels: Record<string, string> = {}, by = 1): void {
@@ -32,6 +33,13 @@ export class Metrics {
     this.hist.set(key, h);
   }
 
+  /** Sets (or overwrites) a labeled gauge value — emitted at render time alongside the passed-in scalars (#92). */
+  setGauge(name: string, labels: Record<string, string> = {}, value: number): void {
+    const m = this.labeledGauges.get(name) ?? new Map<string, number>();
+    m.set(labelStr(labels), value);
+    this.labeledGauges.set(name, m);
+  }
+
   render(gauges: Record<string, number> = {}): string {
     const out: string[] = [];
     for (const [name, series] of this.counters) {
@@ -45,6 +53,10 @@ export class Metrics {
       const base = k ? k.slice(1, -1) + ',' : '';
       BUCKETS.forEach((b, i) => out.push(`${name}_bucket{${base}le="${b}"} ${h.buckets[i]}`));
       out.push(`${name}_bucket{${base}le="+Inf"} ${h.count}`, `${name}_sum${k} ${h.sum}`, `${name}_count${k} ${h.count}`);
+    }
+    for (const [name, series] of this.labeledGauges) {
+      out.push(`# TYPE ${name} gauge`);
+      for (const [k, v] of series) out.push(`${name}${k} ${v}`);
     }
     for (const [name, v] of Object.entries(gauges)) out.push(`# TYPE ${name} gauge`, `${name} ${v}`);
     return out.join('\n') + '\n';

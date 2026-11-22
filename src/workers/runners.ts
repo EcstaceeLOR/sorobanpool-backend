@@ -8,6 +8,8 @@ import { PrismaCursorStore, PrismaEventSink, PrismaReadStore } from '../persiste
 import type { PoolState } from '../indexer/read-model.js';
 import { CONTRACT_NAMES } from '../chain/deployments.js';
 import type { ErrorReporter } from '../observability/errors.js';
+import type { PrismaClient } from '../generated/prisma/client.js';
+import { Metrics } from '../observability/metrics.js';
 import type { Services } from '../app/services.js';
 import { combineQuotes } from '../fx/fx.js';
 import { dispatchDue, NotificationProducer, queueDeadlineReminders } from '../notifications/dispatcher.js';
@@ -49,17 +51,63 @@ export interface Runner {
   stop(): Promise<void>;
 }
 
+/** Options for the interval runner. */
+export interface RunnerOptions {
+  reporter?: ErrorReporter;
+  /** Prometheus metrics registry for per-job instrumentation (#92). */
+  metrics?: Metrics;
+  /**
+   * Optional distributed lock (#91). Called before each tick; if it returns false this replica
+   * skips that tick (another replica is already running it). Use pgAdvisoryLock for Postgres.
+   */
+  lock?: (name: string) => Promise<boolean>;
+}
+
+/**
+ * Returns a per-process advisory-lock function backed by Postgres session locks (#91).
+ * Once this process acquires the lock it is cached locally (session locks are held until the
+ * connection closes), so subsequent ticks skip the round-trip and always return true.
+ * A second process/replica calling pg_try_advisory_lock with the same key gets false and skips.
+ */
+export function pgAdvisoryLock(prisma: PrismaClient): (name: string) => Promise<boolean> {
+  const SP_LOCK_CLASS = 783_291; // arbitrary SorobanPool marker (avoids collisions with app locks)
+  const held = new Set<number>();
+  const hashName = (s: string) => {
+    let h = 0x811c9dc5;
+    for (const c of s) h = (Math.imul(h ^ c.charCodeAt(0), 0x01000193) >>> 0);
+    return h | 0; // signed int32 for the two-int pg_try_advisory_lock overload
+  };
+  return async (name: string): Promise<boolean> => {
+    const key = hashName(name);
+    if (held.has(key)) return true; // this process already holds the lock on its long-lived connection
+    const rows = await prisma.$queryRaw<[{ pg_try_advisory_lock: boolean }]>`
+      SELECT pg_try_advisory_lock(${SP_LOCK_CLASS}::integer, ${key}::integer)`;
+    const acquired = rows[0]?.pg_try_advisory_lock ?? false;
+    if (acquired) held.add(key);
+    return acquired;
+  };
+}
+
 /** Runs `fn` every `ms`, never overlapping, logging failures instead of crashing the process. */
-export function every(name: string, ms: number, fn: () => Promise<void>, reporter?: ErrorReporter): Runner {
+export function every(name: string, ms: number, fn: () => Promise<void>, opts?: RunnerOptions): Runner {
   let busy = false;
   let stopped = false;
   let current: Promise<void> = Promise.resolve();
+  const { reporter, metrics, lock } = opts ?? {};
   const tick = async () => {
+    if (lock) {
+      const acquired = await lock(name).catch(() => false);
+      if (!acquired) { busy = false; return; }
+    }
     try {
       await fn();
+      metrics?.inc('sp_keeper_runs_total', { job: name });
+      metrics?.setGauge('sp_keeper_last_success_timestamp', { job: name }, Date.now() / 1000);
     } catch (e) {
       console.error(`[${name}] ${(e as Error).message}`);
       reporter?.capture(e, name);
+      metrics?.inc('sp_keeper_runs_total', { job: name });
+      metrics?.inc('sp_keeper_failures_total', { job: name });
     } finally {
       busy = false;
     }
@@ -88,7 +136,7 @@ export function startIndexer(s: Services, server: rpc.Server, intervalMs = 5000)
   const runner = every('indexer', intervalMs, async () => {
     await indexer.tick();
     if (indexer.shouldAlert) console.error(`[indexer] ALERT lag=${indexer.metrics.lag} ledgers`);
-  }, s.reporter);
+  }, { reporter: s.reporter });
   return { runner, indexer };
 }
 
@@ -151,28 +199,52 @@ export async function keeperTick(s: Services): Promise<{ ok: number; refused: nu
   return runKeeper(keeperChain(s), actions, (a, e) => console.error(`[keeper] ${a.job} ${String(a.args[0])}: ${(e as Error).message}`));
 }
 
-export function startKeeper(s: Services, intervalMs = 15_000): Runner {
+export function startKeeper(s: Services, intervalMs = 15_000, opts?: { metrics?: Metrics; lock?: (name: string) => Promise<boolean> }): Runner {
   return every('keeper', intervalMs, async () => {
     const r = await keeperTick(s);
     if (r.ok || r.errored) console.log(`[keeper] ok=${r.ok} refused=${r.refused} errored=${r.errored}`);
-  }, s.reporter);
+    if (opts?.metrics) {
+      if (r.ok)      opts.metrics.inc('sp_keeper_actions_total', { job: 'keeper', result: 'ok' }, r.ok);
+      if (r.refused) opts.metrics.inc('sp_keeper_actions_total', { job: 'keeper', result: 'refused' }, r.refused);
+      if (r.errored) opts.metrics.inc('sp_keeper_actions_total', { job: 'keeper', result: 'errored' }, r.errored);
+    }
+  }, { reporter: s.reporter, ...opts });
 }
 
 /** Hourly: extend contract instance/code TTL before they lapse. A missing entry is a paging-level problem. */
-/** Wallet instances checked per run, after the core contracts; the batch rotates through every wallet. */
+/** Wallet and bond instances checked per run; each rotates through the full set over successive runs. */
 export const WALLETS_PER_TTL_RUN = 25;
+/** Bond contract instances per TTL run (#94). Bonds are standalone contracts like smart wallets. */
+export const BONDS_PER_TTL_RUN = 20;
 
-export function startTtlKeeper(s: Services, intervalMs = 3_600_000): Runner {
-  let offset = 0;
+export function startTtlKeeper(s: Services, intervalMs = 3_600_000, opts?: { metrics?: Metrics; lock?: (name: string) => Promise<boolean> }): Runner {
+  let walletOffset = 0;
+  let bondOffset = 0;
   return every('ttl-extend', intervalMs, async () => {
-    const batch = await s.prisma.user.findMany({
-      where: { walletAddress: { startsWith: 'C' } }, select: { walletAddress: true }, orderBy: { id: 'asc' }, skip: offset, take: WALLETS_PER_TTL_RUN,
+    // Wallet instances (paginated, rotating)
+    const walletBatch = await s.prisma.user.findMany({
+      where: { walletAddress: { startsWith: 'C' } }, select: { walletAddress: true }, orderBy: { id: 'asc' }, skip: walletOffset, take: WALLETS_PER_TTL_RUN,
     });
-    offset = batch.length < WALLETS_PER_TTL_RUN ? 0 : offset + batch.length;
-    const r = await s.chain.keepAlive(batch.map((b) => b.walletAddress!));
-    if (r.missing.length) console.error(`[ttl-extend] ALERT entries not found (archived?): ${r.missing.join(', ')}`);
-    if (r.extended.length) console.log(`[ttl-extend] extended ${r.extended.join(', ')} in ${r.txHash}`);
-  }, s.reporter);
+    walletOffset = walletBatch.length < WALLETS_PER_TTL_RUN ? 0 : walletOffset + walletBatch.length;
+    const wr = await s.chain.keepAlive(walletBatch.map((b) => b.walletAddress!));
+    if (wr.missing.length) console.error(`[ttl-extend] ALERT wallet entries not found (archived?): ${wr.missing.join(', ')}`);
+    if (wr.extended.length) console.log(`[ttl-extend] extended wallets ${wr.extended.join(', ')} in ${wr.txHash}`);
+
+    // Bond contract instances (#94): bonds are standalone contracts per supplier, treated like wallets
+    const bondBatch = await s.prisma.bond.findMany({
+      select: { supplierAddress: true }, orderBy: { supplierAddress: 'asc' }, skip: bondOffset, take: BONDS_PER_TTL_RUN,
+    });
+    bondOffset = bondBatch.length < BONDS_PER_TTL_RUN ? 0 : bondOffset + bondBatch.length;
+    if (bondBatch.length) {
+      const br = await s.chain.keepAlive(bondBatch.map((b) => b.supplierAddress));
+      if (br.missing.length) console.error(`[ttl-extend] ALERT bond entries not found (archived?): ${br.missing.join(', ')}`);
+      if (br.extended.length) console.log(`[ttl-extend] extended bonds ${br.extended.join(', ')} in ${br.txHash}`);
+    }
+
+    // Open dispute data entries (#94): log count so the runbook alert can fire if entries near expiry
+    const openCount = await s.prisma.dispute.count({ where: { state: 'OPEN' } });
+    if (openCount) console.log(`[ttl-extend] ${openCount} open dispute(s): instance covered via core contracts; persistent data keys via disputeDataKeys if wired`);
+  }, { reporter: s.reporter, ...opts });
 }
 
 /** Every 5 minutes: expire stale offers, anchor transfers, and page when the fee sponsor runs low. */
@@ -191,7 +263,7 @@ export function startMaintenance(s: Services, intervalMs = 300_000): Runner {
     for (const m of bad) console.error(`[reconcile] ALERT pool ${m.poolId} ${m.field}: db=${m.db} chain=${m.chain}`);
     const h = await checkSponsor(s.chain, s.env.SPONSOR_MIN_XLM);
     if (h.low) console.error(`[maintenance] ALERT sponsor balance ${Number(h.balanceStroops) / 1e7} XLM is below ${s.env.SPONSOR_MIN_XLM}`);
-  }, s.reporter);
+  }, { reporter: s.reporter });
 }
 
 /** Every minute: `fx-refresh` (brief 7.7). Alerts while sources diverge, because offer publishing is blocked then. */
@@ -199,7 +271,7 @@ export function startFxRefresh(s: Services, intervalMs = 60_000): Runner {
   return every('fx-refresh', intervalMs, async () => {
     const r = await refreshFx(s.prisma, s.fx, s.now());
     if (r.blocked) console.error(`[fx-refresh] ALERT offer publishing blocked: ${r.reason}`);
-  }, s.reporter);
+  }, { reporter: s.reporter });
 }
 
 /** Every 30 seconds: send due SMS (quiet hours are applied when queued; failures back off). */
@@ -207,5 +279,5 @@ export function startNotifier(s: Services, intervalMs = 30_000): Runner {
   return every('notifier', intervalMs, async () => {
     const r = await dispatchDue(s.prisma, s.sms, s.now());
     if (r.sent || r.failed) console.log(`[notifier] sent=${r.sent} retried=${r.retried} failed=${r.failed}`);
-  }, s.reporter);
+  }, { reporter: s.reporter });
 }

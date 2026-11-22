@@ -11,7 +11,7 @@ export const MAX_TTL_KEYS = 40;
 export interface TtlKey {
   /** A core contract name, `smart_wallet` (the shared wallet code) or a wallet's address. */
   contract: string;
-  kind: 'instance' | 'code';
+  kind: 'instance' | 'code' | 'data';
   key: xdr.LedgerKey;
 }
 
@@ -21,14 +21,15 @@ const codeKey = (wasmHash: string) => xdr.LedgerKey.contractCode(new xdr.LedgerK
  * Instance and code ledger keys of every core contract, the shared passkey-wallet code, and the instances of the
  * given user wallets (callers pass a bounded batch; see MAX_TTL_KEYS). Code keys come from the deployment's hashes.
  */
-export function instanceAndCodeKeys(d: Deployments, wallets: string[] = []): TtlKey[] {
+export function instanceAndCodeKeys(d: Deployments, wallets: string[] = [], bonds: string[] = []): TtlKey[] {
   const core = CONTRACT_NAMES.flatMap((name) => [
     { contract: name, kind: 'instance' as const, key: new Contract(d.contracts[name].id).getFootprint() },
     { contract: name, kind: 'code' as const, key: codeKey(d.contracts[name].wasmHash) },
   ]);
   const walletCode = d.smartWallet ? [{ contract: 'smart_wallet', kind: 'code' as const, key: codeKey(d.smartWallet.wasmHash) }] : [];
   const instances = wallets.map((w) => ({ contract: w, kind: 'instance' as const, key: new Contract(w).getFootprint() }));
-  return [...core, ...walletCode, ...instances].slice(0, MAX_TTL_KEYS);
+  const bondInstances = bonds.map((b) => ({ contract: b, kind: 'instance' as const, key: new Contract(b).getFootprint() }));
+  return [...core, ...walletCode, ...instances, ...bondInstances].slice(0, MAX_TTL_KEYS);
 }
 
 export interface TtlStatus {
@@ -70,4 +71,22 @@ export async function extendTtl(
   const done = await server.pollTransaction(sent.hash, { attempts: 30 });
   if (done.status !== rpc.Api.GetTransactionStatus.SUCCESS) throw new Error(`ttl extend ${sent.hash} ${done.status}`);
   return sent.hash;
+}
+
+/**
+ * Persistent contract-data ledger keys for open disputes (#94).
+ * Each dispute stores its record under a u64 key inside the disputes contract.
+ * Pass these to extendTtl alongside instance/code keys so long-running disputes
+ * never lapse before the keeper can close them.
+ */
+export function disputeDataKeys(disputeContractId: string, disputeIds: bigint[]): TtlKey[] {
+  return disputeIds.map((id) => ({
+    contract: `dispute:${id}`,
+    kind: 'data' as const,
+    key: xdr.LedgerKey.contractData(new xdr.LedgerKeyContractData({
+      contract: new Contract(disputeContractId).address().toScAddress(),
+      key: xdr.ScVal.scvU64(xdr.Uint64.fromNumber(Number(id))),
+      durability: xdr.ContractDataDurability.persistent(),
+    })),
+  }));
 }
