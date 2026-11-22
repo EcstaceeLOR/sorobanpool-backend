@@ -80,8 +80,8 @@ described in [indexer-backfill](indexer-backfill.md) (Galexie / ledger-metadata 
 
 ## Verify after a restore or rebuild
 
-1. Indexer caught up: no `[indexer] ALERT lag=...` log lines (lag is under `LAG_ALERT_LEDGERS`, 20) and no
-   `backfill required` errors.
+1. Indexer caught up: no `[indexer] ALERT lag=...` log lines (lag is under `INDEXER_LAG_ALERT_LEDGERS`, default 20),
+   `GET /health` reports `indexer: ok`, and no `backfill required` errors.
 2. Every event projected:
    ```sql
    SELECT count(*) AS unprocessed FROM "ChainEvent" WHERE "processedAt" IS NULL;   -- expect 0

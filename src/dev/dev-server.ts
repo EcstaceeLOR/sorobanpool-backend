@@ -20,6 +20,7 @@ import { buildServices } from '../app/services.js';
 import { loadDeployments } from '../chain/deployments.js';
 import { loadEnv } from '../config/env.js';
 import { LocalObjectStore } from '../evidence/store.js';
+import { Metrics } from '../observability/metrics.js';
 import { createPrisma } from '../persistence/prisma-stores.js';
 import { startIndexer, startKeeper, startTtlKeeper } from '../workers/runners.js';
 
@@ -63,14 +64,15 @@ async function main(): Promise<void> {
   const prisma = createPrisma(env.DATABASE_URL, 1); // PGlite serves a single connection
   const deployments = loadDeployments(env.DEPLOYMENTS_FILE);
   const services = buildServices(env, prisma, deployments, { store: new LocalObjectStore(env.EVIDENCE_DIR) });
+  const metrics = new Metrics();
   const server = new rpc.Server(env.RPC_URL);
   // Start from "now": a fresh in-memory database has no history to replay.
   if (!process.env.INDEXER_START_LEDGER) env.INDEXER_START_LEDGER = (await server.getLatestLedger()).sequence;
-  startIndexer(services, server, 3000);
+  startIndexer(services, server, 3000, metrics);
   startKeeper(services, 6000);
   startTtlKeeper(services);
 
-  const app = await NestFactory.create<NestExpressApplication>(AppModule.forRoot(services), { logger: ['error', 'warn'] });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule.forRoot(services, metrics), { logger: ['error', 'warn'] });
   app.setGlobalPrefix('v1');
   app.enableCors({ origin: true, credentials: true });
   app.useBodyParser('raw', { type: ['image/*', 'video/mp4', 'application/pdf'], limit: '16mb' });

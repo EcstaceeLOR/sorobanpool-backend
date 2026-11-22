@@ -30,6 +30,18 @@ describe('GET /v1/metrics', () => {
     expect(r.text).toContain('route="/v1/offers/:id"');
     expect(r.text).not.toContain('/offers/abc');
     expect(r.text).toContain('sp_notifications_pending 0');
+    expect(r.text).toContain('indexer_lag_ledgers 0');
+  });
+
+  it('exports indexer_lag_ledgers from the stored cursor and the network tip (#85)', async () => {
+    await h.db.prisma.indexerCursor.upsert({
+      where: { id: 'main' },
+      create: { id: 'main', lastLedger: 979 },
+      update: { lastLedger: 979 },
+    });
+    const r = await h.http().get('/v1/metrics').set('Authorization', `Bearer ${'m'.repeat(20)}`);
+    expect(r.status).toBe(200);
+    expect(r.text).toContain('indexer_lag_ledgers 21');
   });
 });
 

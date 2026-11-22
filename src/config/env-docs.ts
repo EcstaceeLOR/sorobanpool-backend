@@ -63,11 +63,13 @@ export const ENV_DOCS: Record<keyof typeof envSchema.shape, EnvDoc> = {
   FX_STATIC: { usedBy: 'all', sensitivity: 'public', description: 'Comma-separated NGN-per-USD rates for the static FX provider (testnet/dev).' },
   ATTESTOR_DAILY_CAP: { usedBy: 'all', sensitivity: 'public', description: 'registry.attest calls allowed per UTC day; alerts at 80%.' },
   INDEXER_START_LEDGER: { usedBy: 'indexer', sensitivity: 'public', description: 'First ledger for a fresh indexer; unset starts near the oldest retained ledger (runbook: indexer-backfill).' },
+  INDEXER_LAG_ALERT_LEDGERS: { usedBy: 'api,indexer', sensitivity: 'public', description: 'Ledgers behind the RPC tip at which indexer_lag_ledgers is degraded in /health and the alert fires (default 20).' },
   JSON_BODY_LIMIT: { usedBy: 'api', sensitivity: 'public', description: 'Max JSON request body (body-parser syntax, e.g. 100kb); larger bodies get a 413.' },
   UPLOAD_BODY_LIMIT: { usedBy: 'api', sensitivity: 'public', description: 'Max raw upload body for media and evidence (image/*, video/mp4, application/pdf); larger bodies get a 413.' },
   COMPRESSION_THRESHOLD_BYTES: { usedBy: 'api', sensitivity: 'public', description: 'JSON GET responses at or above this size are compressed (brotli, else gzip).' },
   IDEMPOTENCY_RETENTION_DAYS: { usedBy: 'worker', sensitivity: 'public', description: 'The maintenance job deletes idempotency keys older than this many days.' },
   ADMIN_ACTION_EXPIRY_MINUTES: { usedBy: 'api', sensitivity: 'public', description: 'Minutes before a pending sensitive admin action expires (1–10,080; default 30).' },
+  ANCHOR_TRANSFER_EXPIRY_MINUTES: { usedBy: 'worker', sensitivity: 'public', description: 'Minutes before a pending anchor transfer is marked as expired (default 1,440).' },
 };
 
 const SENSITIVITY_LABEL: Record<Sensitivity, string> = {

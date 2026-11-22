@@ -35,7 +35,7 @@ Compression and caching: JSON `GET` responses of at least `COMPRESSION_THRESHOLD
 
 ## Health probes
 
-`GET /health/live` answers `200 {status:"ok"}` whenever the process is serving and never touches a dependency, so a database or RPC outage cannot put the container into a restart loop. `GET /health` stays as before and behaves the same way.
+`GET /health/live` answers `200 {status:"ok"}` whenever the process is serving and never touches a dependency, so a database or RPC outage cannot put the container into a restart loop. `GET /health` also always answers `200`, but adds `indexer: "ok" | "degraded" | "skipped"`: it is `degraded` when the latest network ledger minus the stored cursor exceeds `INDEXER_LAG_ALERT_LEDGERS` (default 20), and `skipped` before the first run or when the tip is unknown.
 
 `GET /health/ready` checks each dependency independently, each bounded at 2s:
 
@@ -43,7 +43,7 @@ Compression and caching: JSON `GET` responses of at least `COMPRESSION_THRESHOLD
 | --- | --- |
 | `database` | `SELECT 1` errors or times out |
 | `rpc` | the Soroban RPC cannot return the latest ledger |
-| `indexer` | the indexer cursor is more than `LAG_ALERT_LEDGERS` (20) ledgers behind the RPC tip; `skipped` before its first run or when the tip is unknown |
+| `indexer` | the indexer cursor is more than `INDEXER_LAG_ALERT_LEDGERS` (20 by default) ledgers behind the RPC tip; `skipped` before its first run or when the tip is unknown |
 
 It answers `200 {status:"ready", checks}` or `503 {error:"NOT_READY", message, failing:[...], checks}`. Use liveness for restarts and readiness for routing:
 
@@ -73,7 +73,7 @@ On `SIGTERM` or `SIGINT` the process stops accepting new connections and lets in
 
 ## Metrics and alerts
 
-`http_request_duration_seconds` is a histogram labelled `method`, `route` (the route template, such as `/v1/offers/:id`, or `unmatched`; never a raw URL or id) and `status_class` (`2xx`, `4xx`, `5xx`). `http_requests_total` counts requests by `method`, `route` and `status`. Example Prometheus alert rules:
+`http_request_duration_seconds` is a histogram labelled `method`, `route` (the route template, such as `/v1/offers/:id`, or `unmatched`; never a raw URL or id) and `status_class` (`2xx`, `4xx`, `5xx`). `http_requests_total` counts requests by `method`, `route` and `status`. `indexer_lag_ledgers` is a gauge of the latest network ledger minus the indexer cursor (0 before the first run); it is 0 when caught up and rises while the indexer is behind. `sp_notifications_pending` and `sp_notifications_failed` are gauges from the notification table. Example Prometheus alert rules:
 
 ```yaml
 groups:
@@ -92,6 +92,11 @@ groups:
         for: 10m
         annotations:
           summary: "p95 latency above 1s on {{ $labels.route }}"
+      - alert: IndexerLagHigh
+        expr: indexer_lag_ledgers > 20
+        for: 5m
+        annotations:
+          summary: "indexer is more than 20 ledgers behind the network tip"
 ```
 
 OpenTelemetry traces are enabled only when `OTEL_EXPORTER_OTLP_ENDPOINT` is non-empty. The API records HTTP server spans, Prisma query spans and individual Soroban RPC spans; resources identify `service.name`, `service.version` and `service.role`. The SDK exporter is shut down after HTTP/background work drains.
