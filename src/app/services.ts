@@ -12,6 +12,7 @@ import type { FxSourceQuote } from '../fx/fx.js';
 import { LiveFxProvider } from '../fx/sources.js';
 import { MockAnchor, type AnchorProvider } from '../anchor/anchor.js';
 import { createReporter, type ErrorReporter } from '../observability/errors.js';
+import { PoolPreviewCache } from '../pools/preview-cache.js';
 import { LocalObjectStore, S3ObjectStore, type ObjectStore } from '../evidence/store.js';
 import { PrismaOtpStore, PrismaSessionStore, PrismaUsageStore } from '../persistence/prisma-stores.js';
 import { PiiCipher } from '../common/pii.js';
@@ -67,6 +68,8 @@ export interface Services {
   /** AES-256-GCM for personal data at rest. */
   pii: PiiCipher;
   store: ObjectStore;
+  /** Shared by the public preview route and the indexer so applied events can evict stale pages. */
+  previewCache: PoolPreviewCache;
   /** Undefined on mainnet/production: naira rails need a licensed anchor (brief section 17) and there is none yet. */
   anchor?: AnchorProvider & { confirmDeposit?(id: string): Promise<unknown> };
   now: () => Date;
@@ -109,6 +112,7 @@ export function buildServices(env: Env, prisma: PrismaClient, deployments: Deplo
     otp: new OtpService(new PrismaOtpStore(prisma), sms, env.OTP_HMAC_SECRET, now, o.otpRandom),
     tokens: new TokenService(env.JWT_SECRET, new PrismaSessionStore(prisma), now),
     policy: new SponsorshipPolicy(contractNameMap(deployments), new PrismaUsageStore(prisma), undefined, now),
+    previewCache: new PoolPreviewCache(env.POOL_PREVIEW_CACHE_TTL_SECONDS * 1000, env.POOL_PREVIEW_CACHE_MAX_ENTRIES),
     fx,
     attestations: new Attestor(prisma, chain, attestor, env.ATTESTOR_DAILY_CAP, now),
     kyc: o.kyc ?? createVerificationProvider(env.KYC_PROVIDER, env.NODE_ENV),

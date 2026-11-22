@@ -197,11 +197,34 @@ model Pool {
   frozenAmount     Decimal  @default(0) @db.Decimal(38, 7)
   shareSlug        String   @unique
   lastEventLedger  Int      @default(0)
+  category        String?
+  deliveryState   String?
+  deliveryLga     String?
+  cluster         String?
 
   @@index([state, fillDeadline])
+  @@index([state, id])
+  @@index([state, category, id])
+  @@index([state, deliveryState, deliveryLga, id])
+  @@index([state, cluster, id])
   @@index([endedAt, state])
   @@index([deliveredAt, state])
   @@index([escrowBalance])
+}
+
+/// Activity feed entries written by the projector. Full actor addresses stay here; the API redacts them (#79).
+model PoolActivity {
+  seq        Int      @id @default(autoincrement())
+  poolId     BigInt
+  type       String
+  actor      String?
+  units      Int?
+  tier       Int?
+  ledger     Int
+  occurredAt DateTime
+  aggregate  Boolean  @default(false)
+
+  @@index([poolId, seq])
 }
 
 model Commitment {
@@ -352,6 +375,14 @@ model SponsorUsage {
   @@id([userId, day])
 }
 
+model ReputationTier {
+  subject String
+  role    String
+  tier    Int    @default(0)
+
+  @@id([subject, role])
+}
+
 /// Off-chain details of a pool being created; linked to the on-chain pool by hubHash when `pool_new` is indexed.
 model PendingPool {
   id               String   @id @default(cuid())
@@ -363,5 +394,6 @@ model PendingPool {
   pickupWindow     Json
   fillDeadline     DateTime
   shareSlug        String   @unique
+  cluster          String?
   createdAt        DateTime @default(now())
 }

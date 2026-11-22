@@ -32,6 +32,8 @@ const PUBLIC_ROUTES = new Set([
   'GET /v1/offers/{id}',
   'GET /v1/openapi.json',
   'GET /v1/p/{slug}',
+  'GET /v1/pools',
+  'GET /v1/pools/{id}/activity',
   'GET /v1/pools/{id}/sharecard.png',
   'GET /v1/pools/{id}/stream',
   'PUT /v1/uploads/put',
@@ -84,7 +86,7 @@ describe('auth contract (docs/openapi.json)', () => {
       const failures: string[] = [];
       for (const o of bearer) {
         const r = await call(h, o.method, o.path);
-        if (r.status !== 401) failures.push(`${o.key} -> ${r.status}`);
+        if (r.status !== 401 || r.body?.message !== 'missing or invalid bearer token') failures.push(`${o.key} -> ${r.status} ${JSON.stringify(r.body)}`);
       }
       expect(failures).toEqual([]);
     });

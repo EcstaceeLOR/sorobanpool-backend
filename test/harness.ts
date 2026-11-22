@@ -101,6 +101,7 @@ export async function startHarness(
   // Access logs are silent in tests unless a test captures them.
   configureHttp(app, env, { accessLog: opts.accessLog ?? (() => {}) });
   await app.init();
+  await app.listen(0, '127.0.0.1');
   const http = () => request(app.getHttpServer());
   let n = 0;
   const sessions = new Map<string, { token: string; userId: string; refreshToken: string; roles: string[] }>();

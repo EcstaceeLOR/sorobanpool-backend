@@ -1,5 +1,5 @@
 import type { DecodedEvent } from './decode.js';
-import type { PoolRow, PoolState, ReadStore } from './read-model.js';
+import { activityFromEvent, type PoolRow, type PoolState, type ReadStore } from './read-model.js';
 
 type Handler = (ev: DecodedEvent, s: ReadStore) => Promise<void>;
 
@@ -118,13 +118,17 @@ export const HANDLERS: Record<string, Handler> = {
   'bond.deposit': async (ev, s) => bondDelta(ev, s, asBig(ev.data)),
   'bond.withdraw': async (ev, s) => bondDelta(ev, s, -asBig(ev.data)),
   'bond.slashed': async (ev, s) => bondDelta(ev, s, -asBig(ev.data)),
+  'rep.rep_upd': async (ev, s) => {
+    const [role, , tier] = tuple(ev.data);
+    await s.saveReputationTier({ subject: String(ev.key), role: String(role), tier: asNum(tier) });
+  },
 };
 
 /** Events that are recorded in ChainEvent but intentionally do not change a read model. */
 export const IGNORED_EVENTS: ReadonlySet<string> = new Set([
   'config.params', 'config.paused', 'config.unpaused', 'config.upgraded',
   'registry.user_reg', 'registry.user_att', 'registry.user_rev', 'registry.user_sus', 'registry.user_uns',
-  'rep.rep_upd', 'disputes.d_evid',
+  'disputes.d_evid',
   // Emitted by each user's own passkey wallet, which the indexer does not subscribe to (contracts ADR 0006).
   'wallet.key_add', 'wallet.key_rm',
 ]);
@@ -164,7 +168,11 @@ export class Projector {
       if (await s.markProcessed(ev.id, { ledger: ev.ledger, contract: ev.contract, topic: ev.event })) return false;
       await handler(ev, s);
       const p = ev.contract === 'group_buy' ? await s.pool(BigInt(ev.key as bigint)) : undefined;
-      if (p) await s.savePool({ ...p, lastEventLedger: Math.max(p.lastEventLedger, ev.ledger) });
+      if (p) {
+        await s.savePool({ ...p, lastEventLedger: Math.max(p.lastEventLedger, ev.ledger) });
+        const activity = activityFromEvent(ev);
+        if (activity) await s.saveActivity({ ...activity, poolId: p.id });
+      }
       return true;
     });
   }

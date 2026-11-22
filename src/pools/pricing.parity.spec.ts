@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { cumulativeAlloc, ceilingPrice, finalUnitPrice, refundFor, tierIndex, type Tier } from './pricing.js';
+import { cumulativeAlloc, ceilingPrice, finalUnitPrice, quote, refundFor, tierIndex, type Tier } from './pricing.js';
 
 interface Vector {
   tiers: [number, number][];
@@ -34,6 +34,12 @@ describe('pricing parity with the contracts', () => {
       });
       expect(total).toBe(v.total);
       expect(tierIndex(tiers, total) ?? -1).toBe(v.tier);
+      const after = total + 1;
+      const next = tiers[(tierIndex(tiers, after) ?? -1) + 1];
+      const q = quote(tiers, total, 1);
+      expect(q.nextBreak?.minUnits ?? null).toBe(next?.minUnits ?? null);
+      expect(q.nextBreak?.unitPrice ?? null).toBe(next?.unitPrice ?? null);
+      expect(q.nextBreak?.unitsToGo ?? null).toBe(next ? next.minUnits - after : null);
       if (!v.filled) {
         expect(v.refunds).toEqual(v.paid);
         continue;

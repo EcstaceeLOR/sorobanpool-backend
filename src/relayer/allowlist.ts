@@ -69,12 +69,11 @@ export class SponsorshipPolicy {
 
   private async consumeDailyAllowance(userId: string, contractName?: string, fn?: string): Promise<void> {
     const fnKey = contractName && fn ? `${contractName}.${fn}` : undefined;
-    const cap = (fnKey !== undefined && fnKey in this.capOverrides)
-      ? this.capOverrides[fnKey]!
-      : (this.dailyCap ?? DEFAULT_DAILY_CAP);
+    const override = fnKey === undefined ? undefined : this.capOverrides[fnKey];
+    const cap = override ?? (this.dailyCap ?? DEFAULT_DAILY_CAP);
     const day = this.now().toISOString().slice(0, 10);
-    // Use a compound user key so per-function counters are tracked separately from the global counter.
-    const trackingUserId = fnKey ? `${userId}:${fnKey}` : userId;
+    // Use a compound user key only for configured per-function caps; otherwise keep one counter per user per day.
+    const trackingUserId = override === undefined ? userId : `${userId}:${fnKey}`;
     const n = await this.usage.increment(trackingUserId, day);
     if (n > cap) throw new SponsorshipError('CAP_REACHED', 'Daily free-transaction limit reached');
   }

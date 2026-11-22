@@ -1,10 +1,10 @@
 # API (v1)
 
-Auth is a bearer access token (15 min) from OTP login; refresh tokens rotate and a replayed token revokes the family. Routes marked *public* need no token. Errors: `{error, message}`; contract failures are `422 {error:"CONTRACT_ERROR", contractCode}` (map the code with `src/chain/artifacts/errors.json`).
+Auth is a bearer access token (15 min) from OTP login; refresh tokens rotate and a replayed token revokes the family. Routes marked *public* need no token; a valid bearer on a public route is still honoured (an invalid one is treated as anonymous). Errors: `{error, message}`; contract failures are `422 {error:"CONTRACT_ERROR", contractCode}` (map the code with `src/chain/artifacts/errors.json`).
 
 **Auth/users**: `POST /auth/otp/request`, `/auth/otp/verify`, `/auth/refresh`, `/auth/logout` (public) · passkeys: `POST /auth/passkey/register/{options,verify}` (signed in), `POST /auth/passkey/login/{options,verify}` (public, usernameless; challenges are single use and expire in 5 minutes) · `GET|PATCH /me` (includes local account `status`) · `POST /wallets/passkey {passkeyId}` creates the user's passkey smart wallet from a passkey they registered (sponsor-deployed, idempotent; contracts ADR 0006) · `GET /wallets/challenge`, `POST /wallets` bind a classic device-key account instead (testnet fallback for browsers without passkeys) · `POST /suppliers/apply` (runs CAC and bank-account-name checks; an admin still decides), `GET /suppliers/me` · `POST /kyc/start` (BVN or NIN + selfie: identity, liveness, face match; on success the attestor writes level 1 on-chain), `GET /kyc/status` (identifier masked) · `POST /registry/register/prepare`
 **Catalog**: `GET /offers`, `GET /offers/:id` (public) · `POST /offers`, `PATCH /offers/:id`, `POST /offers/:id/publish`, `/offers/:id/refresh-fx` (SUPPLIER)
-**Pools**: `POST /pools/prepare` (ORGANIZER) · `GET /pools`, `GET /pools/:id`, `GET /pools/:id/quote?units=` · `GET /p/:slug`, `GET /pools/:id/sharecard.png?variant=wide|square&lang=en|pcm` (public; wide 1200x630, square 1080x1080, Pidgin labels with `lang=pcm`) · `POST /pools/:id/{commit|increase|withdraw|close-early|accept|reject|dispatch|delivery|pickup|refund|member-confirm}/prepare`
+**Pools**: `POST /pools/prepare` (ORGANIZER) · `GET /pools` (public; a bearer token narrows results to the signed-in user), `GET /pools/:id`, `GET /pools/:id/quote?units=`, `GET /pools/:id/activity?limit=&cursor=` (public activity feed) · `GET /p/:slug`, `GET /pools/:id/sharecard.png?variant=wide|square&lang=en|pcm` (public; wide 1200x630, square 1080x1080, Pidgin labels with `lang=pcm`) · `POST /pools/:id/{commit|increase|withdraw|close-early|accept|reject|dispatch|delivery|pickup|refund|member-confirm}/prepare`
 **Transactions**: `POST /tx/submit {txXdr, signedAuthEntries[], idempotencyKey}`
 **Evidence**: `POST /uploads/sign`, `PUT /uploads/put` (signed URL), `GET /evidence/:id/url`, `GET /evidence/file` (signed URL, 5 min)
 **Disputes**: `POST /disputes/prepare`, `POST /disputes/:id/evidence/prepare`, `GET /disputes/:id`, `GET /disputes?mine=true` · arbiter (ARBITER): `GET /arbiter/queue` (includes `slaSecondsLeft`, `breached` and `slaLabel` per open dispute; the most overdue item appears first), `GET /arbiter/disputes/:id`, `POST /arbiter/disputes/:id/resolve/prepare`
@@ -21,6 +21,14 @@ Risk reporting (ADMIN): `GET /admin/risk/rates?slice=supplier|category|state` re
 
 Every `prepare` returns `{txXdr, authEntries[], validUntilLedger, contract, fn}`; the client signs only `authEntries` with its wallet and sends them to `/tx/submit`. Quotes read the indexed pool and are indicative; the contract is authoritative.
 
+`GET /pools` is public and returns open pools newest first. Filters combine with AND: `state` (anonymous callers can only see `Open`), `category`, `deliveryState`, `lga`, `cluster` and `mine=true` (authenticated; pools the caller organizes, supplies or has committed to). Use `limit` (1–100, default 20) and the `X-Next-Cursor` response header for cursor pagination; the body stays a plain array for compatibility. The filter columns are denormalised onto `Pool` by the indexer and covered by composite indexes.
+
+`GET /pools/:id/activity` returns indexed pool events newest first as `{events:[{id,type,message,at,ledger,actor?,units?,tier?}], nextCursor}`; `id` and `nextCursor` are keyset cursors, so new events cannot shift a page in progress. `limit` is 1–100 (default 20); pass `?cursor=<previous nextCursor>` (also sent as `X-Next-Cursor`) for older events. Aggregate events (created, price break, filled, dispatched, …) are visible to everyone; member events (joined, increased, left, picked up, refunded) are only returned to the organizer, supplier, a member with a commitment, or a signed-in trader in the pool's cluster. Actor addresses are always truncated (`GABC…WXYZ`), never returned in full.
+
+`GET /pools/:id/quote?units=` includes `nextBreak: {minUnits, unitPriceUsdc, unitsToGo}` or `null` at the top tier. `minUnits` is the pool size that starts the next price break and `unitsToGo` is how many more units the pool needs to reach it. `GET /p/:slug` uses a bounded in-process cache (TTL `POOL_PREVIEW_CACHE_TTL_SECONDS`, default 5) keyed by slug; indexer events for a pool evict its previews immediately.
+
+`POST /pools/:id/commit/prepare` checks the per-member unit cap, the member share cap, the pool unit cap, the listed-member cap and the verification-tier USDC cap before building a transaction. Failures use the contract's numeric codes (`contractCode` 315–319) with a matching `error` and a `limit` in the body. The caps come from the indexed offer, commitments, roles and reputation tier, with platform defaults overridable by `COMMIT_*` environment variables; the contract remains authoritative, so a passing pre-check is not a guarantee.
+
 **Operational**: `GET /health` · `GET /health/live` · `GET /health/ready` (see below) · `GET /metrics` (Prometheus text; bearer `METRICS_TOKEN`, required in production) · `GET /openapi.json` · `GET /pools/:id/stream` (public Server-Sent Events: a `pool` event with state, units, tier and ledger now and after each indexed event, `ping` every 25s; at most 500 streams per API process).
 
 Every request accepts a well-formed `X-Request-Id` (1–64 ASCII letters, digits, dot, underscore or hyphen) or receives a generated UUID. The value is returned in `X-Request-Id`, included in error bodies and request/error logs, and forwarded to outbound FX and Horizon HTTP providers.
@@ -35,7 +43,7 @@ Compression and caching: JSON `GET` responses of at least `COMPRESSION_THRESHOLD
 
 ## Health probes
 
-`GET /health/live` answers `200 {status:"ok"}` whenever the process is serving and never touches a dependency, so a database or RPC outage cannot put the container into a restart loop. `GET /health` stays as before and behaves the same way.
+`GET /health/live` answers `200 {status:"ok"}` whenever the process is serving and never touches a dependency, so a database or RPC outage cannot put the container into a restart loop. `GET /health` also always answers `200`, but adds `indexer: "ok" | "degraded" | "skipped"`: it is `degraded` when the latest network ledger minus the stored cursor exceeds `INDEXER_LAG_ALERT_LEDGERS` (default 20), and `skipped` before the first run or when the tip is unknown.
 
 `GET /health/ready` checks each dependency independently, each bounded at 2s:
 
@@ -43,7 +51,7 @@ Compression and caching: JSON `GET` responses of at least `COMPRESSION_THRESHOLD
 | --- | --- |
 | `database` | `SELECT 1` errors or times out |
 | `rpc` | the Soroban RPC cannot return the latest ledger |
-| `indexer` | the indexer cursor is more than `LAG_ALERT_LEDGERS` (20) ledgers behind the RPC tip; `skipped` before its first run or when the tip is unknown |
+| `indexer` | the indexer cursor is more than `INDEXER_LAG_ALERT_LEDGERS` (20 by default) ledgers behind the RPC tip; `skipped` before its first run or when the tip is unknown |
 
 It answers `200 {status:"ready", checks}` or `503 {error:"NOT_READY", message, failing:[...], checks}`. Use liveness for restarts and readiness for routing:
 
@@ -73,7 +81,7 @@ On `SIGTERM` or `SIGINT` the process stops accepting new connections and lets in
 
 ## Metrics and alerts
 
-`http_request_duration_seconds` is a histogram labelled `method`, `route` (the route template, such as `/v1/offers/:id`, or `unmatched`; never a raw URL or id) and `status_class` (`2xx`, `4xx`, `5xx`). `http_requests_total` counts requests by `method`, `route` and `status`. Example Prometheus alert rules:
+`http_request_duration_seconds` is a histogram labelled `method`, `route` (the route template, such as `/v1/offers/:id`, or `unmatched`; never a raw URL or id) and `status_class` (`2xx`, `4xx`, `5xx`). `http_requests_total` counts requests by `method`, `route` and `status`. `indexer_lag_ledgers` is a gauge of the latest network ledger minus the indexer cursor (0 before the first run); it is 0 when caught up and rises while the indexer is behind. `sp_notifications_pending` and `sp_notifications_failed` are gauges from the notification table. Example Prometheus alert rules:
 
 ```yaml
 groups:
@@ -92,6 +100,11 @@ groups:
         for: 10m
         annotations:
           summary: "p95 latency above 1s on {{ $labels.route }}"
+      - alert: IndexerLagHigh
+        expr: indexer_lag_ledgers > 20
+        for: 5m
+        annotations:
+          summary: "indexer is more than 20 ledgers behind the network tip"
 ```
 
 OpenTelemetry traces are enabled only when `OTEL_EXPORTER_OTLP_ENDPOINT` is non-empty. The API records HTTP server spans, Prisma query spans and individual Soroban RPC spans; resources identify `service.name`, `service.version` and `service.role`. The SDK exporter is shut down after HTTP/background work drains.

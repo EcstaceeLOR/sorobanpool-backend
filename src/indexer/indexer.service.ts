@@ -1,7 +1,10 @@
 import { decodeEvent, type DecodedEvent, type RawEvent } from './decode.js';
 import type { Projector } from './projector.js';
+import { DEFAULT_INDEXER_LAG_ALERT_LEDGERS } from '../config/env.js';
+import type { Metrics } from '../observability/metrics.js';
 
-export const LAG_ALERT_LEDGERS = 20;
+/** Kept as an alias so existing imports keep working; the source of truth is the env default. */
+export const LAG_ALERT_LEDGERS = DEFAULT_INDEXER_LAG_ALERT_LEDGERS;
 /** The retention window slides ~1 ledger per 5 s, so a fresh start begins this far inside it (about 5 minutes). */
 export const RETENTION_MARGIN_LEDGERS = 60;
 
@@ -50,6 +53,9 @@ export class Indexer {
     private readonly batch = 1000,
     /** Runs after an event is newly committed (never on replays). Failures are logged, not fatal: at-most-once side effects. */
     private readonly onApplied?: (ev: DecodedEvent) => Promise<unknown>,
+    private readonly lagAlertLedgers = DEFAULT_INDEXER_LAG_ALERT_LEDGERS,
+    /** Prometheus registry for the lag gauge (#85). Optional so unit tests need no observability setup. */
+    private readonly prom?: Metrics,
   ) {}
 
   /** One poll: fetch from the cursor, store raw, project, advance. Safe to call repeatedly. */
@@ -76,7 +82,8 @@ export class Indexer {
       await this.cursor.set(to);
     }
     this.metrics.lastLedger = Math.max(to, from);
-    this.metrics.lag = latest - this.metrics.lastLedger;
+    this.metrics.lag = Math.max(0, latest - this.metrics.lastLedger);
+    this.prom?.setGauge('indexer_lag_ledgers', {}, this.metrics.lag);
     return { processed };
   }
 
@@ -89,6 +96,6 @@ export class Indexer {
   }
 
   get shouldAlert(): boolean {
-    return this.metrics.lag > LAG_ALERT_LEDGERS || this.metrics.behindRetention;
+    return this.metrics.lag > this.lagAlertLedgers || this.metrics.behindRetention;
   }
 }

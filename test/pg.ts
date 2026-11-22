@@ -59,7 +59,9 @@ async function startRealPostgres(url: string): Promise<TestDb> {
 export async function startTestDb(): Promise<TestDb> {
   if (process.env.TEST_DATABASE_URL) return startRealPostgres(process.env.TEST_DATABASE_URL);
   const db = new PGlite();
-  for (const sql of migrations()) await db.exec(sql);
+  for (const sql of migrations()) {
+    for (const statement of sql.split(';').map((s) => s.trim()).filter(Boolean)) await db.query(statement);
+  }
   const port = await freePort();
   const server = new PGLiteSocketServer({ db, port, host: '127.0.0.1' });
   await server.start();

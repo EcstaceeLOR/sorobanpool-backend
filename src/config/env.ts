@@ -2,6 +2,9 @@ import { z } from 'zod';
 
 const bool = z.enum(['true', 'false']).transform((v) => v === 'true');
 
+/** Default for the indexer lag alert and the degraded /health signal (#85). */
+export const DEFAULT_INDEXER_LAG_ALERT_LEDGERS = 20;
+
 export const envSchema = z.object({
   ROLE: z.enum(['api', 'worker', 'indexer']).default('api'),
   PORT: z.coerce.number().int().default(3000),
@@ -56,10 +59,22 @@ export const envSchema = z.object({
   /** registry.attest calls allowed per UTC day (brief 7.8 attestor daily cap); alerts at 80%. */
   ATTESTOR_DAILY_CAP: z.coerce.number().int().positive().default(500),
   INDEXER_START_LEDGER: z.coerce.number().int().positive().optional(),
+  /** Ledgers behind the RPC tip at which the indexer alert fires and /health reports `indexer: degraded` (#85). */
+  INDEXER_LAG_ALERT_LEDGERS: z.coerce.number().int().positive().default(DEFAULT_INDEXER_LAG_ALERT_LEDGERS),
   /** Max JSON request body (body-parser syntax, e.g. "100kb"); larger bodies get a 413 (#171). */
   JSON_BODY_LIMIT: z.string().min(1).default('100kb'),
   /** Max raw upload body for media and evidence (image/*, video/mp4, application/pdf) (#171). */
   UPLOAD_BODY_LIMIT: z.string().min(1).default('16mb'),
+  /** Seconds a cached public pool preview stays fresh before it is rebuilt (#75). */
+  POOL_PREVIEW_CACHE_TTL_SECONDS: z.coerce.number().int().positive().default(5),
+  /** Maximum number of cached public pool previews per API process (#75). */
+  POOL_PREVIEW_CACHE_MAX_ENTRIES: z.coerce.number().int().positive().default(1000),
+  /** Max member share of a pool in basis points, used by the commit pre-check (#78). */
+  COMMIT_MAX_MEMBER_SHARE_BP: z.coerce.number().int().min(1).max(10_000).default(5000),
+  /** Max listed members per pool, used by the commit pre-check (#78). */
+  COMMIT_MAX_MEMBERS_PER_POOL: z.coerce.number().int().positive().default(200),
+  /** Comma-separated stroops caps for trader tiers 0, 1 and 2, used by the commit pre-check (#78). */
+  COMMIT_TRADER_TIER_CAPS_STROOPS: z.string().regex(/^\d+(,\d+){2}$/).default('500000000,5000000000,25000000000'),
   /** JSON GET responses at or above this size are compressed (brotli, else gzip) (#174). */
   COMPRESSION_THRESHOLD_BYTES: z.coerce.number().int().nonnegative().default(1024),
   /** Idempotency keys older than this are deleted by the maintenance job (#173). */

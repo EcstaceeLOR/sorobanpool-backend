@@ -12,8 +12,9 @@ With no row in `IndexerCursor` and `INDEXER_START_LEDGER` unset, the indexer sta
 ```
 
 The margin exists because the window slides forward while the first request is in flight.
-While catching up, `indexer_lag_ledgers` is high and the lag alert fires; it clears once the cursor reaches the tip
-(1,000 ledgers per tick).
+While catching up, the `indexer_lag_ledgers` gauge exported on `/v1/metrics` is high, `GET /health` reports
+`indexer: degraded`, and the lag alert fires; all clear once the cursor reaches the tip (1,000 ledgers per tick).
+The alert threshold is `INDEXER_LAG_ALERT_LEDGERS` (default 20 ledgers).
 
 ## Explicit start
 `INDEXER_START_LEDGER=<ledger>` is honoured strictly. If it is older than the retention window the indexer refuses

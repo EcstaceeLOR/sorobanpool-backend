@@ -1,4 +1,9 @@
-import { Sep1Discovery, Sep1Error } from './sep1.js';
+import { vi } from 'vitest';
+import { Sep1Discovery } from './sep1.js';
+
+function tomlResponse(body: string, contentLength = body.length): Response {
+  return new Response(body, { status: 200, headers: { 'Content-Length': String(contentLength) } });
+}
 
 describe('SEP-1 Discovery', () => {
   describe('parseToml', () => {
@@ -6,17 +11,13 @@ describe('SEP-1 Discovery', () => {
       const discovery = new Sep1Discovery({ anchorDomain: 'example.com' });
 
       // We'll use the fetch method with mocked fetch
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-length', '1000']]),
-        text: async () => `
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch).mockResolvedValueOnce(tomlResponse(`
 # Stellar TOML
 AUTH_SERVER=https://auth.example.com
 TRANSFER_SERVER=https://transfer.example.com
 SIGNING_KEY=GBBD47XT7DKO670SSE7I2HOF5JSRGO3GSCD4VD5G53N7F7K2G4ZCMI2
-        `,
-      });
+        `, 1000));
 
       const result = await discovery.fetch('example.com');
       expect(result.AUTH_SERVER).toBe('https://auth.example.com');
@@ -29,12 +30,8 @@ SIGNING_KEY=GBBD47XT7DKO670SSE7I2HOF5JSRGO3GSCD4VD5G53N7F7K2G4ZCMI2
     it('caches TOML data with TTL', async () => {
       const discovery = new Sep1Discovery({ anchorDomain: 'example.com', cacheTtlMs: 1000 });
 
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-length', '500']]),
-        text: async () => 'AUTH_SERVER=https://auth.example.com',
-      });
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch).mockResolvedValueOnce(tomlResponse('AUTH_SERVER=https://auth.example.com'));
 
       // First fetch
       const result1 = await discovery.fetch('example.com');
@@ -49,18 +46,10 @@ SIGNING_KEY=GBBD47XT7DKO670SSE7I2HOF5JSRGO3GSCD4VD5G53N7F7K2G4ZCMI2
     it('invalidates cache after TTL', async () => {
       const discovery = new Sep1Discovery({ anchorDomain: 'example.com', cacheTtlMs: 100 });
 
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          headers: new Map([['content-length', '500']]),
-          text: async () => 'AUTH_SERVER=https://auth1.example.com',
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          headers: new Map([['content-length', '500']]),
-          text: async () => 'AUTH_SERVER=https://auth2.example.com',
-        });
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch)
+        .mockResolvedValueOnce(tomlResponse('AUTH_SERVER=https://auth1.example.com'))
+        .mockResolvedValueOnce(tomlResponse('AUTH_SERVER=https://auth2.example.com'));
 
       await discovery.fetch('example.com');
       expect(global.fetch).toHaveBeenCalledTimes(1);
@@ -76,17 +65,9 @@ SIGNING_KEY=GBBD47XT7DKO670SSE7I2HOF5JSRGO3GSCD4VD5G53N7F7K2G4ZCMI2
 
   describe('error handling', () => {
     it('throws on timeout', async () => {
-      const discovery = new Sep1Discovery({
-        anchorDomain: 'example.com',
-        timeoutMs: 100,
-      });
-
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock).mockImplementationOnce(
-        () => new Promise((resolve) => setTimeout(() => resolve({
-          ok: true,
-          text: async () => 'AUTH_SERVER=https://auth.example.com',
-        }), 200)),
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch).mockImplementationOnce(
+        () => new Promise((resolve) => setTimeout(() => resolve(tomlResponse('AUTH_SERVER=https://auth.example.com')), 200)),
       );
 
       // Note: This test depends on actual AbortController implementation
@@ -99,12 +80,8 @@ SIGNING_KEY=GBBD47XT7DKO670SSE7I2HOF5JSRGO3GSCD4VD5G53N7F7K2G4ZCMI2
         maxSizeBytes: 100,
       });
 
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: true,
-        headers: new Map([['content-length', '5000']]),
-        text: async () => 'x'.repeat(5000),
-      });
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch).mockResolvedValueOnce(tomlResponse('x'.repeat(5000), 5000));
 
       await expect(discovery.fetch('example.com')).rejects.toThrow();
     });
@@ -112,12 +89,8 @@ SIGNING_KEY=GBBD47XT7DKO670SSE7I2HOF5JSRGO3GSCD4VD5G53N7F7K2G4ZCMI2
     it('handles fetch failures', async () => {
       const discovery = new Sep1Discovery({ anchorDomain: 'example.com' });
 
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock).mockResolvedValueOnce({
-        ok: false,
-        status: 404,
-        statusText: 'Not Found',
-      });
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch).mockResolvedValueOnce(new Response(null, { status: 404, statusText: 'Not Found' }));
 
       await expect(discovery.fetch('example.com')).rejects.toThrow();
     });
@@ -127,18 +100,10 @@ SIGNING_KEY=GBBD47XT7DKO670SSE7I2HOF5JSRGO3GSCD4VD5G53N7F7K2G4ZCMI2
     it('clears all cache', async () => {
       const discovery = new Sep1Discovery({ anchorDomain: 'example.com' });
 
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          headers: new Map([['content-length', '500']]),
-          text: async () => 'AUTH_SERVER=https://auth1.example.com',
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          headers: new Map([['content-length', '500']]),
-          text: async () => 'AUTH_SERVER=https://auth2.example.com',
-        });
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch)
+        .mockResolvedValueOnce(tomlResponse('AUTH_SERVER=https://auth1.example.com'))
+        .mockResolvedValueOnce(tomlResponse('AUTH_SERVER=https://auth2.example.com'));
 
       await discovery.fetch('example.com');
       discovery.clearCache();
@@ -150,18 +115,10 @@ SIGNING_KEY=GBBD47XT7DKO670SSE7I2HOF5JSRGO3GSCD4VD5G53N7F7K2G4ZCMI2
     it('clears cache for specific domain', async () => {
       const discovery = new Sep1Discovery({ anchorDomain: 'example.com' });
 
-      global.fetch = jest.fn();
-      (global.fetch as jest.Mock)
-        .mockResolvedValueOnce({
-          ok: true,
-          headers: new Map([['content-length', '500']]),
-          text: async () => 'AUTH_SERVER=https://auth1.example.com',
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          headers: new Map([['content-length', '500']]),
-          text: async () => 'AUTH_SERVER=https://auth2.example.com',
-        });
+      global.fetch = vi.fn();
+      vi.mocked(global.fetch)
+        .mockResolvedValueOnce(tomlResponse('AUTH_SERVER=https://auth1.example.com'))
+        .mockResolvedValueOnce(tomlResponse('AUTH_SERVER=https://auth2.example.com'));
 
       await discovery.fetch('example.com');
       discovery.clearCacheFor('example.com');

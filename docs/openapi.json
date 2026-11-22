@@ -201,6 +201,33 @@
           },
           "hub": {
             "type": "string"
+          },
+          "members": {
+            "type": "integer"
+          },
+          "category": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deliveryState": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "deliveryLga": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cluster": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -208,7 +235,12 @@
           "state",
           "totalUnits",
           "moq",
-          "progressPct"
+          "progressPct",
+          "members",
+          "category",
+          "deliveryState",
+          "deliveryLga",
+          "cluster"
         ]
       },
       "PoolQuote": {
@@ -242,6 +274,10 @@
               "null"
             ],
             "properties": {
+              "minUnits": {
+                "type": "integer",
+                "description": "Pool size at which this price break starts"
+              },
               "unitsToGo": {
                 "type": "integer"
               },
@@ -262,6 +298,69 @@
           "expectedRefundIfClosedNowUsdc",
           "nextBreak",
           "note"
+        ]
+      },
+      "PoolActivityEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Stable keyset cursor for this event"
+          },
+          "type": {
+            "type": "string",
+            "description": "created | joined | increased | left | price_break | filled | dispatched | ..."
+          },
+          "message": {
+            "type": "string",
+            "description": "Plain-language description, never containing a full address"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "ledger": {
+            "type": "integer"
+          },
+          "actor": {
+            "type": "string",
+            "description": "Truncated address, present only on member events visible to participants"
+          },
+          "units": {
+            "type": "integer"
+          },
+          "tier": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "id",
+          "type",
+          "message",
+          "at",
+          "ledger"
+        ]
+      },
+      "PoolActivityFeed": {
+        "type": "object",
+        "properties": {
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PoolActivityEvent"
+            }
+          },
+          "nextCursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Pass as ?cursor= for the next page; also returned as X-Next-Cursor"
+          }
+        },
+        "required": [
+          "events",
+          "nextCursor"
         ]
       },
       "FxQuote": {
@@ -2347,11 +2446,7 @@
         "tags": [
           "Pools"
         ],
-        "security": [
-          {
-            "bearerAuth": []
-          }
-        ],
+        "security": [],
         "responses": {
           "200": {
             "description": "Success",
@@ -2378,7 +2473,12 @@
                     "title": "Mama Gold Rice 50kg",
                     "unitLabel": "bag",
                     "currentUnitPriceNaira": "45,000",
-                    "hub": "12 Balogun Market, Lagos Island"
+                    "hub": "12 Balogun Market, Lagos Island",
+                    "members": 4,
+                    "category": "food",
+                    "deliveryState": "Lagos",
+                    "deliveryLga": "Lagos Island",
+                    "cluster": null
                   }
                 ]
               }
@@ -2446,6 +2546,7 @@
                   "currentUnitPriceUsdc": "333700000",
                   "currentUnitPriceNaira": "45,000",
                   "nextBreak": {
+                    "minUnits": 100,
                     "unitsToGo": 70,
                     "unitPriceUsdc": "322600000"
                   },
@@ -2547,6 +2648,43 @@
         }
       }
     },
+    "/v1/pools/{id}/activity": {
+      "get": {
+        "operationId": "PoolsController.activity",
+        "tags": [
+          "Pools"
+        ],
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PoolActivityFeed"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error"
+          },
+          "429": {
+            "description": "Rate limited"
+          }
+        }
+      }
+    },
     "/v1/pools/{id}/quote": {
       "get": {
         "operationId": "PoolsController.quote",
@@ -2584,6 +2722,7 @@
                   "currentUnitPriceUsdc": "333700000",
                   "expectedRefundIfClosedNowUsdc": "0",
                   "nextBreak": {
+                    "minUnits": 100,
                     "unitsToGo": 65,
                     "unitPriceUsdc": "322600000"
                   },

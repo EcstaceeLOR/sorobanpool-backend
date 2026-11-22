@@ -1,6 +1,6 @@
 import { rpc } from '@stellar/stellar-sdk';
 import { A } from '../chain/args.js';
-import type { RawEvent } from '../indexer/decode.js';
+import type { DecodedEvent, RawEvent } from '../indexer/decode.js';
 import { Indexer, type RpcPort } from '../indexer/indexer.service.js';
 import { Projector } from '../indexer/projector.js';
 import { dueActions, runKeeper, type ChainPort as KeeperChain, type KeeperAction, type KeeperDispute, type KeeperParams, type KeeperPool } from '../keeper/jobs.js';
@@ -126,12 +126,31 @@ export function every(name: string, ms: number, fn: () => Promise<void>, opts?: 
   };
 }
 
-export function startIndexer(s: Services, server: rpc.Server, intervalMs = 5000): { runner: Runner; indexer: Indexer } {
+/** Pool ids whose public preview is affected by an applied event. */
+export async function affectedPools(s: Services, ev: DecodedEvent): Promise<bigint[]> {
+  const asBig = (v: unknown): bigint => BigInt(v as bigint | number | string);
+  if (ev.contract === 'group_buy') return [asBig(ev.key)];
+  if (ev.contract === 'disputes' && ev.event === 'd_open') {
+    const data = ev.data as unknown[];
+    return data.length ? [asBig(data[0])] : [];
+  }
+  if (ev.contract === 'disputes' && (ev.event === 'd_resolve' || ev.event === 'd_timeout')) {
+    const d = await s.prisma.dispute.findUnique({ where: { id: asBig(ev.key) }, select: { poolId: true } });
+    return d ? [d.poolId] : [];
+  }
+  return [];
+}
+
+export function startIndexer(s: Services, server: rpc.Server, intervalMs = 5000, metrics?: Metrics): { runner: Runner; indexer: Indexer } {
   const ids = CONTRACT_NAMES.map((n) => s.deployments.contracts[n].id);
   const producer = new NotificationProducer(s.prisma, async () => combineQuotes(await s.fx.quotes(), s.now()).rate, s.now);
   const indexer = new Indexer(
     rpcPort(server), new PrismaCursorStore(s.prisma), new PrismaEventSink(s.prisma), new Projector(new PrismaReadStore(s.prisma)), ids, s.env.INDEXER_START_LEDGER ?? (s.deployments.deployedAtLedger ? { from: s.deployments.deployedAtLedger } : 'oldest'), 1000,
-    (ev) => producer.onEvent(ev),
+    async (ev) => {
+      for (const id of await affectedPools(s, ev)) s.previewCache.evictPool(id);
+      await producer.onEvent(ev);
+    },
+    s.env.INDEXER_LAG_ALERT_LEDGERS, metrics,
   );
   const runner = every('indexer', intervalMs, async () => {
     await indexer.tick();

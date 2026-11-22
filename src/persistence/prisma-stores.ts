@@ -4,7 +4,7 @@ import { formatUsdc, toStroops } from '../common/money.js';
 import { ceilingPrice, type Tier } from '../pools/pricing.js';
 import type { RawEvent } from '../indexer/decode.js';
 import type { CursorStore, EventSink } from '../indexer/indexer.service.js';
-import type { BondRow, CommitmentRow, DisputeRow, PoolRow, PoolState, ReadStore } from '../indexer/read-model.js';
+import type { ActivityEventRow, BondRow, CommitmentRow, DisputeRow, PoolRow, PoolState, ReadStore, ReputationTierRow } from '../indexer/read-model.js';
 import type { OtpRecord, OtpStore } from '../auth/otp.service.js';
 import type { SessionRecord, SessionStore } from '../auth/token.service.js';
 import type { UsageStore } from '../relayer/allowlist.js';
@@ -22,7 +22,7 @@ export function createPrisma(connectionString: string, maxConnections?: number, 
         return traceOperation(tracer, 'prisma.query', { 'db.system': 'postgresql', 'db.operation.name': operation, ...(model ? { 'db.collection.name': model } : {}) }, () => query(args));
       },
     },
-  });
+  }) as PrismaClient;
 }
 
 /** Money is stored as USDC decimals (Decimal(38,7)); the app works in stroops (bigint). */
@@ -156,12 +156,17 @@ export class PrismaReadStore implements ReadStore {
     // First sighting: link the off-chain hub details recorded when the pool was prepared.
     const pending = await this.db.pendingPool.findUnique({ where: { hubHash: r.hubHash } });
     const price = pending ? await this.currentPrice(pending.offerId, r) : '0';
+    const offer = pending ? await this.db.offer.findUnique({ where: { id: pending.offerId }, select: { category: true, deliveryAreas: true } }) : undefined;
+    const areas = Array.isArray(offer?.deliveryAreas) ? offer.deliveryAreas as { state?: string; lga?: string }[] : [];
+    const area = areas[0];
     await this.db.pool.create({
       data: {
         id: r.id, offerId: pending?.offerId ?? 'unknown', organizerAddress: r.organizer, supplierAddress: r.supplier,
         hubAddress: pending?.hubAddress ?? '', hubContact: pending?.hubContact ?? '', hubHash: r.hubHash,
         pickupWindow: (pending?.pickupWindow ?? {}) as Prisma.InputJsonValue, offerHash: r.offerHash,
         fillDeadline: pending?.fillDeadline ?? new Date(0), shareSlug: pending?.shareSlug ?? `p${r.id}`,
+        category: offer?.category ?? null, deliveryState: area?.state ?? null, deliveryLga: area?.lga ?? null,
+        cluster: pending?.cluster ?? null,
         currentUnitPrice: price, ...data,
       },
     });
@@ -229,6 +234,28 @@ export class PrismaReadStore implements ReadStore {
       where: { supplierAddress: r.supplier },
       create: { supplierAddress: r.supplier, total: toDec(r.total), reserved: '0' },
       update: { total: toDec(r.total) },
+    });
+  }
+
+  async reputationTier(subject: string, role: string): Promise<ReputationTierRow | undefined> {
+    const r = await this.db.reputationTier.findUnique({ where: { subject_role: { subject, role } } });
+    return r ? { subject: r.subject, role: r.role, tier: r.tier } : undefined;
+  }
+
+  async saveReputationTier(r: ReputationTierRow): Promise<void> {
+    await this.db.reputationTier.upsert({
+      where: { subject_role: { subject: r.subject, role: r.role } },
+      create: { subject: r.subject, role: r.role, tier: r.tier },
+      update: { tier: r.tier },
+    });
+  }
+
+  async saveActivity(r: ActivityEventRow): Promise<void> {
+    await this.db.poolActivity.create({
+      data: {
+        poolId: r.poolId, type: r.type, actor: r.actor ?? null, units: r.units ?? null, tier: r.tier ?? null,
+        ledger: r.ledger, occurredAt: r.occurredAt, aggregate: r.aggregate,
+      },
     });
   }
 }

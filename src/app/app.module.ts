@@ -30,14 +30,14 @@ export function appControllers(services: Services) {
 
 @Module({})
 export class AppModule {
-  static forRoot(services: Services): DynamicModule {
+  static forRoot(services: Services, metrics: Metrics = new Metrics()): DynamicModule {
     return {
       module: AppModule,
       controllers: [...appControllers(services), OpenApiController],
       providers: [
         { provide: SERVICES, useValue: services },
         { provide: OPENAPI_DOC, useValue: buildOpenApi([...appControllers(services), OpenApiController]) },
-        { provide: METRICS, useValue: new Metrics() },
+        { provide: METRICS, useValue: metrics },
         { provide: APP_INTERCEPTOR, useClass: MetricsInterceptor },
         { provide: APP_GUARD, useClass: RateLimitGuard },
         { provide: APP_GUARD, useClass: AuthGuard },
