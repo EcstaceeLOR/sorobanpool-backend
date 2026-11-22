@@ -148,10 +148,13 @@ export class CatalogController {
   }
 }
 
+/** A product photo as offers expose it (#104): the full WebP and a 320px thumbnail for low-bandwidth clients. */
+export const imageRef = (id: string) => ({ id, url: `/v1/images/${id}`, thumb: `/v1/images/${id}?w=320` });
+
 export function publicOffer(o: Prisma.OfferGetPayload<object>) {
   return {
     id: o.id, supplierId: o.supplierId, title: o.title, brand: o.brand, description: o.description, unitLabel: o.unitLabel,
-    category: o.category, perishable: o.perishable, images: o.images, tiersNgn: o.tiersNgn, tiersUsdc: o.tiersUsdc, moq: o.moq,
+    category: o.category, perishable: o.perishable, images: o.images.map(imageRef), tiersNgn: o.tiersNgn, tiersUsdc: o.tiersUsdc, moq: o.moq,
     maxUnits: o.maxUnits, maxPerMember: o.maxPerMember, leadTimeHours: o.leadTimeHours, deliveryAreas: o.deliveryAreas,
     validUntil: o.validUntil, offerHash: o.offerHash, status: o.status,
   };

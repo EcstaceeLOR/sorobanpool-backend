@@ -134,7 +134,7 @@ export const API_SCHEMAS: Record<string, JsonSchema> = {
       unitLabel: { type: 'string' },
       category: { type: 'string' },
       perishable: { type: 'boolean' },
-      images: { type: 'array', items: { type: 'string' } },
+      images: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, url: { type: 'string' }, thumb: { type: 'string' } }, required: ['id', 'url', 'thumb'] } },
       tiersNgn: {},
       tiersUsdc: {},
       moq: { type: 'integer' },

@@ -1,6 +1,6 @@
 import { BadRequestException, Body, Controller, ForbiddenException, Get, Header, HttpCode, Inject, NotFoundException, Param, Post, Put, Query, StreamableFile, UnauthorizedException } from '@nestjs/common';
 import { z } from 'zod';
-import { canReadEvidence, evidenceHash, KYB_ALLOWED_MIME, KYB_DOCUMENT_KINDS, signUrl, toPublicThumbnail, validateUpload, verifySignedUrl } from '../evidence/evidence.js';
+import { canReadEvidence, evidenceHash, KYB_ALLOWED_MIME, KYB_DOCUMENT_KINDS, signUrl, THUMB_WIDTHS, thumbKey, toPublicThumbnail, validateUpload, verifySignedUrl } from '../evidence/evidence.js';
 import { type AuthedUser, CurrentUser, parse, Public } from './http.js';
 import { SERVICES, type Services } from './services.js';
 
@@ -58,9 +58,24 @@ export class UploadsController {
       }
     }
     await this.s.store.put(isPublic ? 'public' : 'evidence', p.key, stored);
+    if (isPublic) await this.storeThumbnails(p.key, stored);
     const sha = evidenceHash(stored);
     await this.s.prisma.evidence.update({ where: { id: row.id }, data: { sha256: sha, mime: isPublic ? 'image/webp' : row.mime } });
     return { evidenceId: row.id, sha256: sha };
+  }
+
+  /**
+   * Thumbnails for a product photo (#104), stored beside the original. Best effort: a failure is logged and never
+   * fails the upload, because the original is already stored and usable.
+   */
+  private async storeThumbnails(objectKey: string, original: Uint8Array): Promise<void> {
+    for (const width of THUMB_WIDTHS) {
+      try {
+        await this.s.store.put('public', thumbKey(objectKey, width), await toPublicThumbnail(original, width));
+      } catch (e) {
+        console.warn(`[uploads] ${width}px thumbnail failed for ${objectKey}: ${(e as Error).message}`);
+      }
+    }
   }
 
   /** The caller's own uploaded KYB documents (#131); read them through `GET /evidence/:id/url`. */
@@ -95,10 +110,18 @@ export class UploadsController {
   }
 
   /** Public product photos only (kind PRODUCT): already resized, metadata-stripped WebP. Everything else needs a signed URL. */
+  /** `?w=320` or `?w=800` returns that thumbnail (#104); any other value, or none, returns the original. */
   @Public() @Get('images/:id') @Header('Cache-Control', 'public, max-age=86400, immutable')
-  async image(@Param('id') id: string) {
+  async image(@Param('id') id: string, @Query('w') w?: string) {
     const ev = await this.s.prisma.evidence.findUnique({ where: { id } });
-    const bytes = ev && ev.kind === 'PRODUCT' && ev.sha256 ? await this.s.store.get('public', ev.objectKey) : null;
+    const width = THUMB_WIDTHS.find((x) => String(x) === w);
+    const objectKey = ev && ev.kind === 'PRODUCT' && ev.sha256 ? ev.objectKey : null;
+    let bytes: Buffer | null = null;
+    if (objectKey) {
+      if (width) bytes = await this.s.store.get('public', thumbKey(objectKey, width));
+      // A missing thumbnail (uploaded before #104, or its generation failed) falls back to the original.
+      if (!bytes) bytes = await this.s.store.get('public', objectKey);
+    }
     if (!ev || !bytes) throw new NotFoundException('image not found');
     return new StreamableFile(bytes, { type: 'image/webp' });
   }
