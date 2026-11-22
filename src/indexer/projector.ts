@@ -1,10 +1,11 @@
 import type { DecodedEvent } from './decode.js';
-import { activityFromEvent, type PoolRow, type PoolState, type ReadStore } from './read-model.js';
+import { activityFromEvent, type BondRow, type PoolRow, type PoolState, type ReadStore } from './read-model.js';
 
 type Handler = (ev: DecodedEvent, s: ReadStore) => Promise<void>;
 
 const asBig = (v: unknown): bigint => BigInt(v as bigint | number | string);
 const asNum = (v: unknown): number => Number(v);
+const minBig = (a: bigint, b: bigint): bigint => (a < b ? a : b);
 const tuple = (v: unknown): unknown[] => v as unknown[];
 
 async function mustPool(s: ReadStore, key: unknown): Promise<PoolRow> {
@@ -98,26 +99,52 @@ export const HANDLERS: Record<string, Handler> = {
   },
   'disputes.d_open': async (ev, s) => {
     const [poolId, opener, amount] = tuple(ev.data);
-    await s.saveDispute({ id: asBig(ev.key), poolId: asBig(poolId), opener: String(opener), claimedAmount: asBig(amount), openedAt: ev.closedAt, state: 'OPEN' });
+    await s.saveDispute({
+      id: asBig(ev.key), poolId: asBig(poolId), opener: String(opener), claimedAmount: asBig(amount),
+      openedAt: ev.closedAt, state: 'OPEN', evidenceCount: 0, closedAt: null,
+    });
     const p = await mustPool(s, poolId);
     await s.savePool({ ...p, frozenAmount: p.frozenAmount + asBig(amount) });
+  },
+  'disputes.d_evid': async (ev, s) => {
+    const d = await s.dispute(asBig(ev.key));
+    if (!d) throw new Error('evidence for unknown dispute');
+    await s.saveDispute({ ...d, evidenceCount: d.evidenceCount + 1 });
   },
   'disputes.d_resolve': async (ev, s) => {
     const [arbiter, hash] = tuple(ev.data);
     const d = await s.dispute(asBig(ev.key));
     if (!d) throw new Error('resolution for unknown dispute');
-    await s.saveDispute({ ...d, state: 'RESOLVED', arbiter: String(arbiter), reasoningHash: Buffer.from(hash as Uint8Array).toString('hex') });
+    await s.saveDispute({ ...d, state: 'RESOLVED', closedAt: ev.closedAt, arbiter: String(arbiter), reasoningHash: Buffer.from(hash as Uint8Array).toString('hex') });
     await releaseFrozen(s, d.poolId, d.claimedAmount);
   },
   'disputes.d_timeout': async (ev, s) => {
     const d = await s.dispute(asBig(ev.key));
     if (!d) throw new Error('timeout for unknown dispute');
-    await s.saveDispute({ ...d, state: 'TIMED_OUT' });
+    await s.saveDispute({ ...d, state: 'TIMED_OUT', closedAt: ev.closedAt });
     await releaseFrozen(s, d.poolId, d.claimedAmount);
   },
-  'bond.deposit': async (ev, s) => bondDelta(ev, s, asBig(ev.data)),
-  'bond.withdraw': async (ev, s) => bondDelta(ev, s, -asBig(ev.data)),
-  'bond.slashed': async (ev, s) => bondDelta(ev, s, -asBig(ev.data)),
+  'bond.deposit': async (ev, s) => {
+    const b = await bondOf(s, String(ev.key));
+    await s.saveBond({ ...b, total: b.total + asBig(ev.data), lastEventLedger: ev.ledger });
+  },
+  'bond.withdraw': async (ev, s) => {
+    const b = await bondOf(s, String(ev.key));
+    const total = b.total - asBig(ev.data);
+    await s.saveBond({ ...b, total, reserved: minBig(b.reserved, total), lastEventLedger: ev.ledger });
+  },
+  'bond.slashed': async (ev, s) => {
+    const b = await bondOf(s, String(ev.key));
+    const amounts = Array.isArray(ev.data) ? ev.data : [ev.data];
+    const requested = asBig(amounts[0]);
+    // Contracts may emit (requested, actual); a single amount means the bond covered all of it, up to its balance.
+    const actual = amounts.length > 1 ? asBig(amounts[1]) : (requested > b.total ? b.total : requested);
+    const total = b.total - actual;
+    await s.saveBond({
+      ...b, total, reserved: minBig(b.reserved, total),
+      slashRequested: b.slashRequested + requested, slashActual: b.slashActual + actual, lastEventLedger: ev.ledger,
+    });
+  },
   'rep.rep_upd': async (ev, s) => {
     const [role, , tier] = tuple(ev.data);
     await s.saveReputationTier({ subject: String(ev.key), role: String(role), tier: asNum(tier) });
@@ -128,7 +155,6 @@ export const HANDLERS: Record<string, Handler> = {
 export const IGNORED_EVENTS: ReadonlySet<string> = new Set([
   'config.params', 'config.paused', 'config.unpaused', 'config.upgraded',
   'registry.user_reg', 'registry.user_att', 'registry.user_rev', 'registry.user_sus', 'registry.user_uns',
-  'disputes.d_evid',
   // Emitted by each user's own passkey wallet, which the indexer does not subscribe to (contracts ADR 0006).
   'wallet.key_add', 'wallet.key_rm',
 ]);
@@ -147,10 +173,8 @@ async function releaseFrozen(s: ReadStore, poolId: bigint, amount: bigint): Prom
   if (p) await s.savePool({ ...p, frozenAmount: p.frozenAmount - amount });
 }
 
-async function bondDelta(ev: DecodedEvent, s: ReadStore, delta: bigint): Promise<void> {
-  const supplier = String(ev.key);
-  const b = (await s.bond(supplier)) ?? { supplier, total: 0n };
-  await s.saveBond({ ...b, total: b.total + delta });
+async function bondOf(s: ReadStore, supplier: string): Promise<BondRow> {
+  return (await s.bond(supplier)) ?? { supplier, total: 0n, reserved: 0n, slashRequested: 0n, slashActual: 0n, lastEventLedger: 0 };
 }
 
 export class Projector {

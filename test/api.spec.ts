@@ -534,6 +534,37 @@ describe('disputes and arbiter', () => {
     expect((log.data as { hash: string }).hash).toBe(res.body.reasoningHash);
     expect(scValToNative(nativeToScVal(1))).toBeDefined();
   });
+
+  it('shows only open disputes in the arbiter queue, sorted by SLA due time (#88)', async () => {
+    const arb = await h.login(PHONE_ARBITER);
+    const mk = (id: bigint, state: string, sla: string) => h.db.prisma.dispute.create({ data: {
+      id, poolId: 7n, openerAddress: 'GX', reason: 'Damaged', claimedUnits: 1, claimedAmount: '1',
+      state, openedAt: new Date(), slaDueAt: new Date(sla),
+    } });
+    await mk(880101n, 'OPEN', '2026-01-02T00:00:00Z');
+    await mk(880102n, 'OPEN', '2026-01-01T00:00:00Z');
+    await mk(880103n, 'RESOLVED', '2025-01-01T00:00:00Z');
+    await mk(880104n, 'TIMED_OUT', '2025-01-01T00:00:00Z');
+    const q = await h.http().get('/v1/arbiter/queue').set(auth(arb.token)).expect(200);
+    const ids = q.body.map((d: { id: string; evidenceCount: number }) => d.id);
+    expect(ids.indexOf('880102')).toBeLessThan(ids.indexOf('880101'));
+    expect(ids).not.toContain('880103');
+    expect(ids).not.toContain('880104');
+    expect(q.body[0]).toMatchObject({ evidenceCount: 0, closedAt: null });
+  });
+
+  it('serves /bonds/me from the read model without an RPC round trip (#89)', async () => {
+    const s = await approvedSupplier();
+    const before = h.chain.calls.length;
+    const blank = await h.http().get('/v1/bonds/me').set(auth(s.token)).expect(200);
+    expect(blank.body).toMatchObject({ total: '0', reserved: '0', slashRequested: '0', slashActual: '0' });
+    await h.db.prisma.bond.create({
+      data: { supplierAddress: s.kp.publicKey(), total: '500', reserved: '50', slashRequested: '120', slashActual: '100' },
+    });
+    const r = await h.http().get('/v1/bonds/me').set(auth(s.token)).expect(200);
+    expect(r.body).toMatchObject({ total: '500', reserved: '50', slashRequested: '120', slashActual: '100' });
+    expect(h.chain.calls.length).toBe(before);
+  });
 });
 
 describe('trader profile and pool cards', () => {

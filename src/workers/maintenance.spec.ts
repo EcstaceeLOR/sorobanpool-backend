@@ -1,4 +1,4 @@
-import { chainState, checkSponsor, expireOffers, expireStaleAnchorTransfers, MismatchTracker, purgeIdempotencyKeys, reconcilePools, toStroopsString } from './maintenance.js';
+import { chainState, checkSponsor, expireOffers, expireStaleAnchorTransfers, MismatchTracker, pruneChainEvents, purgeIdempotencyKeys, reconcilePools, toStroopsString } from './maintenance.js';
 import { startHarness, type Harness } from '../../test/harness.js';
 
 describe('checkSponsor', () => {
@@ -217,5 +217,53 @@ describe('expireStaleAnchorTransfers', () => {
 
     expect(result.expired).toBe(1);
     expect((await h.s.prisma.anchorTransfer.findUnique({ where: { id: 'boundary-old' } }))?.status).toBe('EXPIRED');
+  });
+});
+
+describe('pruneChainEvents (#90)', () => {
+  let h: Harness;
+  beforeEach(async () => { h = await startHarness(); });
+  afterEach(async () => { await h.close(); });
+
+  const now = new Date('2026-06-01T00:00:00Z');
+  const old = new Date('2025-12-01T00:00:00Z'); // just over 180 days
+  const fresh = new Date('2026-05-01T00:00:00Z');
+
+  async function pool(id: bigint, state: string) {
+    await h.s.prisma.pool.create({ data: {
+      id, offerId: 'x', organizerAddress: 'o', supplierAddress: 's', hubAddress: 'h', hubContact: 'c',
+      hubHash: `hash-${id}`, pickupWindow: {}, state, fillDeadline: new Date(0), shareSlug: `prune-${id}`,
+    } });
+  }
+
+  async function event(id: string, poolId: bigint | null, closedAt: Date, protectedEvent = false) {
+    await h.s.prisma.chainEvent.create({
+      data: { id, ledger: 1, contract: 'group_buy', topic: 'committed', payload: {}, closedAt, poolId, protected: protectedEvent },
+    });
+  }
+
+  it('prunes old events for final pools but keeps non-final, fresh, protected and unattributable ones', async () => {
+    await pool(880001n, 'Settled');
+    await pool(880002n, 'Open');
+    await event('final-old', 880001n, old);
+    await event('final-fresh', 880001n, fresh);
+    await event('open-old', 880002n, old);
+    await event('unknown-pool-old', 999999n, old);
+    await event('protected-old', null, old, true);
+    await event('no-pool-old', null, old);
+
+    expect(await pruneChainEvents(h.s.prisma, now, 180)).toBe(2);
+    const left = (await h.s.prisma.chainEvent.findMany({ select: { id: true } })).map((e) => e.id).sort();
+    expect(left).toEqual(['final-fresh', 'open-old', 'protected-old', 'unknown-pool-old']);
+    expect(await pruneChainEvents(h.s.prisma, now, 180)).toBe(0);
+  });
+
+  it('bounds work per run so a large backlog drains over several ticks', async () => {
+    await pool(880003n, 'Expired');
+    for (let i = 0; i < 5; i++) await event(`backlog-${i}`, 880003n, old);
+    expect(await pruneChainEvents(h.s.prisma, now, 180, 2, 1)).toBe(2);
+    expect(await h.s.prisma.chainEvent.count()).toBe(3);
+    expect(await pruneChainEvents(h.s.prisma, now, 180, 2, 1)).toBe(2);
+    expect(await pruneChainEvents(h.s.prisma, now, 180, 2, 1)).toBe(1);
   });
 });

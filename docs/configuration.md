@@ -61,6 +61,14 @@ variable must be set for every role even if that role does not read it.
 | `ATTESTOR_DAILY_CAP` | `500` | no | all | registry.attest calls allowed per UTC day; alerts at 80%. |
 | `INDEXER_START_LEDGER` | optional | no | indexer | First ledger for a fresh indexer; unset starts near the oldest retained ledger (runbook: indexer-backfill). |
 | `INDEXER_LAG_ALERT_LEDGERS` | `20` | no | api,indexer | Ledgers behind the RPC tip at which indexer_lag_ledgers is degraded in /health and the alert fires (default 20). |
+| `INDEXER_BATCH_LEDGERS` | `1000` | no | indexer | Maximum ledgers scanned by one poll; bounds RPC and memory use per tick (default 1000). |
+| `INDEXER_EVENT_PAGE_SIZE` | `200` | no | indexer | Events fetched per getEvents page, at most 200 (the RPC limit). |
+| `INDEXER_EVENT_MAX_PAGES` | `50` | no | indexer | Hard cap on pages per getEvents call; a full page set stops the poll rather than growing without bound. |
+| `INDEXER_RETRIES` | `3` | no | indexer | Extra attempts after a failed RPC call, with exponential backoff. |
+| `INDEXER_RETRY_BASE_MS` | `200` | no | indexer | Delay before the first retry; doubles on each further failure. |
+| `INDEXER_RETRY_MAX_MS` | `10000` | no | indexer | Upper bound on any single retry delay. |
+| `INDEXER_RETRY_JITTER` | `0.2` | no | indexer | Symmetric jitter fraction applied to each backoff delay to avoid thundering herds. |
+| `INDEXER_PROGRESS_LOG_LEDGERS` | `1000` | no | indexer | Log a progress line each time the cursor crosses a multiple of this many ledgers. |
 | `JSON_BODY_LIMIT` | `100kb` | no | api | Max JSON request body (body-parser syntax, e.g. 100kb); larger bodies get a 413. |
 | `UPLOAD_BODY_LIMIT` | `16mb` | no | api | Max raw upload body for media and evidence (image/*, video/mp4, application/pdf); larger bodies get a 413. |
 | `POOL_PREVIEW_CACHE_TTL_SECONDS` | `5` | no | api | Seconds a cached public pool preview stays fresh; indexer events evict earlier (#75). |
@@ -70,5 +78,6 @@ variable must be set for every role even if that role does not read it.
 | `COMMIT_TRADER_TIER_CAPS_STROOPS` | `500000000,5000000000,25000000000` | no | api | Comma-separated stroops caps for trader tiers 0, 1 and 2 in the pre-sign commit check. |
 | `COMPRESSION_THRESHOLD_BYTES` | `1024` | no | api | JSON GET responses at or above this size are compressed (brotli, else gzip). |
 | `IDEMPOTENCY_RETENTION_DAYS` | `7` | no | worker | The maintenance job deletes idempotency keys older than this many days. |
+| `CHAIN_EVENT_RETENTION_DAYS` | `180` | no | worker | Raw ChainEvents for final pools older than this are pruned; events for non-final pools are always kept (#90). |
 | `ADMIN_ACTION_EXPIRY_MINUTES` | `30` | no | api | Minutes before a pending sensitive admin action expires (1–10,080; default 30). |
 | `ANCHOR_TRANSFER_EXPIRY_MINUTES` | `1440` | no | worker | Minutes before a pending anchor transfer is marked as expired (default 1,440). |

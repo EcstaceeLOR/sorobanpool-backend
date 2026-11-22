@@ -254,6 +254,10 @@ model Dispute {
   openedAt        DateTime
   slaDueAt        DateTime
   lastEventLedger Int      @default(0)
+  /// Number of add-evidence events seen; maintained by the projector.
+  evidenceCount   Int      @default(0)
+  /// When the resolution or timeout stopped the SLA clock (null while OPEN).
+  closedAt        DateTime?
 
   @@index([state, slaDueAt])
 }
@@ -275,6 +279,9 @@ model Bond {
   supplierAddress String  @id
   total           Decimal @db.Decimal(38, 7)
   reserved        Decimal @db.Decimal(38, 7)
+  /// Requested and actually deducted amounts of cumulative slash events.
+  slashRequested  Decimal @default(0) @db.Decimal(38, 7)
+  slashActual     Decimal @default(0) @db.Decimal(38, 7)
   lastEventLedger Int     @default(0)
 }
 
@@ -307,8 +314,15 @@ model ChainEvent {
   topic       String
   payload     Json
   processedAt DateTime?
+  /// Ledger close time, used by the retention job instead of wall-clock insertion time (#90).
+  closedAt    DateTime?
+  /// Pool this event belongs to, or null for contract-wide events.
+  poolId      BigInt?
+  /// Set when ownership is unknown: never pruned automatically (#90).
+  protected   Boolean   @default(false)
 
   @@index([ledger])
+  @@index([closedAt, poolId])
 }
 
 model IndexerCursor {

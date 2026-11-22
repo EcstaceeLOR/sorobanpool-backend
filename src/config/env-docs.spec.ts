@@ -28,6 +28,14 @@ describe('docs/configuration.md', () => {
     expect(ENV_DOCS.ENCRYPTION_KEY_ID.sensitivity).toBe('ref');
   });
 
+  it('bounds the polling, backoff and retention settings (#87, #90)', () => {
+    expect(envSchema.shape.INDEXER_EVENT_PAGE_SIZE.safeParse('201').success).toBe(false);
+    expect(envSchema.shape.INDEXER_EVENT_PAGE_SIZE.parse('50')).toBe(50);
+    expect(envSchema.shape.INDEXER_RETRY_JITTER.safeParse('1.5').success).toBe(false);
+    expect(envSchema.shape.INDEXER_RETRIES.parse('0')).toBe(0);
+    expect(envSchema.shape.CHAIN_EVENT_RETENTION_DAYS.parse('90')).toBe(90);
+  });
+
   it('derives defaults from the schema', () => {
     expect(defaultCell('PORT')).toBe('`3000`');
     expect(defaultCell('DATABASE_URL')).toBe('**required**');

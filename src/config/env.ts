@@ -5,6 +5,18 @@ const bool = z.enum(['true', 'false']).transform((v) => v === 'true');
 /** Default for the indexer lag alert and the degraded /health signal (#85). */
 export const DEFAULT_INDEXER_LAG_ALERT_LEDGERS = 20;
 
+/** Bounds for one indexer poll and its RPC retries (#87). */
+export const DEFAULT_INDEXER_BATCH_LEDGERS = 1000;
+export const DEFAULT_INDEXER_EVENT_PAGE_SIZE = 200;
+export const DEFAULT_INDEXER_EVENT_MAX_PAGES = 50;
+export const DEFAULT_INDEXER_RETRIES = 3;
+export const DEFAULT_INDEXER_RETRY_BASE_MS = 200;
+export const DEFAULT_INDEXER_RETRY_MAX_MS = 10_000;
+export const DEFAULT_INDEXER_RETRY_JITTER = 0.2;
+export const DEFAULT_INDEXER_PROGRESS_LOG_LEDGERS = 1000;
+/** Raw ChainEvents for final pools are dropped after this many days (#90). */
+export const DEFAULT_CHAIN_EVENT_RETENTION_DAYS = 180;
+
 export const envSchema = z.object({
   ROLE: z.enum(['api', 'worker', 'indexer']).default('api'),
   PORT: z.coerce.number().int().default(3000),
@@ -61,6 +73,22 @@ export const envSchema = z.object({
   INDEXER_START_LEDGER: z.coerce.number().int().positive().optional(),
   /** Ledgers behind the RPC tip at which the indexer alert fires and /health reports `indexer: degraded` (#85). */
   INDEXER_LAG_ALERT_LEDGERS: z.coerce.number().int().positive().default(DEFAULT_INDEXER_LAG_ALERT_LEDGERS),
+  /** Maximum ledgers scanned by one indexer tick (#87). */
+  INDEXER_BATCH_LEDGERS: z.coerce.number().int().positive().default(DEFAULT_INDEXER_BATCH_LEDGERS),
+  /** Events requested per RPC getEvents page; the RPC caps this at 200 (#87). */
+  INDEXER_EVENT_PAGE_SIZE: z.coerce.number().int().min(1).max(200).default(DEFAULT_INDEXER_EVENT_PAGE_SIZE),
+  /** Hard cap on RPC pages per getEvents call, so a hot ledger range cannot exhaust memory (#87). */
+  INDEXER_EVENT_MAX_PAGES: z.coerce.number().int().positive().default(DEFAULT_INDEXER_EVENT_MAX_PAGES),
+  /** Extra attempts after a failed RPC call; backoff doubles between them (#87). */
+  INDEXER_RETRIES: z.coerce.number().int().nonnegative().default(DEFAULT_INDEXER_RETRIES),
+  /** First retry delay in ms; doubles up to INDEXER_RETRY_MAX_MS (#87). */
+  INDEXER_RETRY_BASE_MS: z.coerce.number().int().positive().default(DEFAULT_INDEXER_RETRY_BASE_MS),
+  /** Upper bound for a single backoff delay in ms (#87). */
+  INDEXER_RETRY_MAX_MS: z.coerce.number().int().positive().default(DEFAULT_INDEXER_RETRY_MAX_MS),
+  /** Symmetric jitter fraction (0..1) applied to each backoff delay (#87). */
+  INDEXER_RETRY_JITTER: z.coerce.number().min(0).max(1).default(DEFAULT_INDEXER_RETRY_JITTER),
+  /** Emit a progress log each time the cursor crosses a multiple of this many ledgers (#87). */
+  INDEXER_PROGRESS_LOG_LEDGERS: z.coerce.number().int().positive().default(DEFAULT_INDEXER_PROGRESS_LOG_LEDGERS),
   /** Max JSON request body (body-parser syntax, e.g. "100kb"); larger bodies get a 413 (#171). */
   JSON_BODY_LIMIT: z.string().min(1).default('100kb'),
   /** Max raw upload body for media and evidence (image/*, video/mp4, application/pdf) (#171). */
@@ -79,6 +107,8 @@ export const envSchema = z.object({
   COMPRESSION_THRESHOLD_BYTES: z.coerce.number().int().nonnegative().default(1024),
   /** Idempotency keys older than this are deleted by the maintenance job (#173). */
   IDEMPOTENCY_RETENTION_DAYS: z.coerce.number().positive().default(7),
+  /** Raw ChainEvents for final pools older than this are pruned in bounded batches (#90). */
+  CHAIN_EVENT_RETENTION_DAYS: z.coerce.number().positive().default(DEFAULT_CHAIN_EVENT_RETENTION_DAYS),
   /** Minutes before a pending two-person admin action expires. */
   ADMIN_ACTION_EXPIRY_MINUTES: z.coerce.number().int().min(1).max(10_080).default(30),
   /** Minutes before a pending anchor transfer is marked as expired. */
