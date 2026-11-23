@@ -6,11 +6,23 @@ import { A, type Role } from '../chain/args.js';
 import { sha256Hex } from '../common/canonical-json.js';
 import { mask } from '../common/pii.js';
 import { KYB_DOCUMENT_KINDS, signUrl } from '../evidence/evidence.js';
+import { storedSources } from '../fx/fx.js';
+import { verHashMatches } from '../verification/attestor.js';
+import { KYC_LEVEL } from './kyc.controller.js';
 import { type AuthedUser, CurrentUser, parse, Roles } from './http.js';
 import { prepareAction, walletOf } from './prepare.js';
 import { SERVICES, type Services } from './services.js';
 
 const roleSchema = z.enum(['Trader', 'Organizer', 'Supplier']);
+
+/** Reason codes for revoking a verification (#129). Written to the audit log, and on-chain with the revocation. */
+export const REVOCATION_REASONS = ['FRAUD', 'DUPLICATE_IDENTITY', 'DOCUMENT_INVALID', 'ADMIN_ERROR'] as const;
+const revokeSchema = z.object({ role: roleSchema, reason: z.enum(REVOCATION_REASONS) });
+
+/** Verification record kind for an admin attestation of one role (the KYC flow keeps its own `KYC` kind). */
+const attestationKind = (dbRole: string) => `ATTESTATION:${dbRole}`;
+/** The record kinds that hold a verification of this role, which a revocation marks REVOKED. */
+const verificationKinds = (dbRole: string): string[] => (dbRole === 'TRADER' ? ['KYC', attestationKind(dbRole)] : [attestationKind(dbRole)]);
 
 @Controller()
 export class AdminController {
@@ -137,6 +149,25 @@ export class AdminController {
           await db.auditLog.create({ data: { actorId: admin.id, action, target: pending.target, data: auditData } });
           await db.auditLog.create({ data: { actorId: admin.id, action: 'admin.action.approve', target: id, data: { requestedBy: pending.actorId, action: pending.action, target: pending.target } } });
         });
+      } else if (pending.action === 'user.revoke') {
+        const { role, reason } = parse(revokeSchema, pending.payload);
+        const dbRole = role.toUpperCase();
+        const user = await this.s.prisma.user.findUnique({ where: { id: pending.target } });
+        if (!user) throw new NotFoundException('user not found');
+        if (!user.walletAddress) throw new BadRequestException({ error: 'NO_WALLET', message: 'The user has not bound a wallet' });
+        const held = await this.s.prisma.userRole.findUnique({ where: { userId_role: { userId: pending.target, role: dbRole } } });
+        if (!held || held.level < 1) throw new NotFoundException('no active verification for this role');
+        const prepared = await prepareAction(this.s, 'registry', 'revoke', A.revoke(await walletOf(this.s, admin.id), user.walletAddress, role, reason));
+        action = 'user.revoke';
+        auditData = { requestedBy: pending.actorId, role, reason };
+        result = { ...prepared, status: 'REVOKED', level: 0 };
+        await this.s.prisma.$transaction(async (db) => {
+          await db.userRole.update({ where: { userId_role: { userId: pending.target, role: dbRole } }, data: { level: 0, verHash: null } });
+          await db.verificationRecord.updateMany({ where: { userId: pending.target, status: 'VERIFIED', kind: { in: verificationKinds(dbRole) } }, data: { status: 'REVOKED' } });
+          await db.pendingAdminAction.update({ where: { id }, data: { status: 'APPROVED', resolvedAt: now } });
+          await db.auditLog.create({ data: { actorId: admin.id, action, target: pending.target, data: auditData } });
+          await db.auditLog.create({ data: { actorId: admin.id, action: 'admin.action.approve', target: id, data: { requestedBy: pending.actorId, action: pending.action, target: pending.target } } });
+        });
       } else {
         throw new ConflictException('unsupported pending admin action');
       }
@@ -189,6 +220,64 @@ export class AdminController {
     return { status: 'TAKEN_DOWN' };
   }
 
+  /**
+   * FX quote history, newest first (#125): each NGN/USD rate the fx-refresh job or offer publishing recorded, with its
+   * sources and the divergence between them. Read-only. Refreshes blocked by divergence have no rate, so they are in
+   * the audit log as `fx.blocked`. Cursor pagination: `limit` 1–100 (default 100), then the `X-Next-Cursor` header.
+   */
+  @Roles('ADMIN') @Get('admin/fx')
+  async fxHistory(@Res({ passthrough: true }) res: Response, @Query() query: Record<string, string>) {
+    const q = parse(z.object({ cursor: z.string().optional(), limit: z.coerce.number().int().min(1).max(100).default(100) }), query);
+    const page = await this.s.prisma.fxQuote.findMany({
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: q.limit + 1, ...(q.cursor ? { cursor: { id: q.cursor }, skip: 1 } : {}),
+    });
+    const rows = page.slice(0, q.limit);
+    if (page.length > q.limit) res.setHeader('X-Next-Cursor', rows[rows.length - 1]!.id);
+    return rows.map((r) => {
+      const { sources, divergence } = storedSources(r.sources);
+      return { id: r.id, pair: r.pair, rate: r.rate.toString(), sources, divergence, createdAt: r.createdAt };
+    });
+  }
+
+  /**
+   * Revokes one role's verification after fraud or an error (#129). Dual control, like suspension: a different ADMIN
+   * approves it, which prepares `registry.revoke` for that admin to sign and sets the stored level to 0.
+   */
+  @Roles('ADMIN') @Post('admin/users/:id/revoke') @HttpCode(200)
+  async revoke(@CurrentUser() admin: AuthedUser, @Param('id') id: string, @Body() body: unknown) {
+    const b = parse(revokeSchema, body);
+    const user = await this.s.prisma.user.findUnique({ where: { id } });
+    if (!user) throw new NotFoundException('user not found');
+    if (!user.walletAddress) throw new BadRequestException({ error: 'NO_WALLET', message: 'The user has not bound a wallet' });
+    const held = await this.s.prisma.userRole.findUnique({ where: { userId_role: { userId: id, role: b.role.toUpperCase() } } });
+    if (!held || held.level < 1) throw new NotFoundException('no active verification for this role');
+    return this.requestApproval(admin.id, 'user.revoke', id, { role: b.role, reason: b.reason });
+  }
+
+  /**
+   * Checks a verification hash (for example one read from the chain) against the salted record it came from (#128).
+   * Only the match is returned: the salt and the personal data stay encrypted on the server. Every check is audited.
+   */
+  @Roles('ADMIN') @Post('admin/users/:userId/verify-hash') @HttpCode(200)
+  async verifyHash(@CurrentUser() admin: AuthedUser, @Param('userId') userId: string, @Body() body: unknown) {
+    const { verHash } = parse(z.object({ verHash: z.string().regex(/^[0-9a-fA-F]{64}$/) }), body);
+    const records = await this.s.prisma.verificationRecord.findMany({
+      where: { userId, OR: [{ kind: 'KYC' }, { kind: { startsWith: 'ATTESTATION:' } }] }, orderBy: { createdAt: 'asc' },
+    });
+    let match: { recordId: string; kind: string; status: string; role: string; level: number } | undefined;
+    for (const r of records) {
+      const sealed = this.s.pii.open<{ role?: string; level?: number; salt?: string }>(r.result as never);
+      if (!sealed.salt) continue; // failed checks never attested, so they have no salt
+      const level = sealed.level ?? KYC_LEVEL; // KYC records written before the level was stored are level 1
+      if (verHashMatches(verHash, { userId, providerRef: r.providerRef, level, salt: sealed.salt })) {
+        match = { recordId: r.id, kind: r.kind, status: r.status, role: sealed.role ?? 'Trader', level };
+        break;
+      }
+    }
+    await this.audit(admin.id, 'user.verify_hash', userId, { verified: match !== undefined, ...(match ? { recordId: match.recordId } : {}) });
+    return match ? { verified: true, ...match } : { verified: false };
+  }
+
   @Roles('ADMIN') @Get('admin/audit')
   async auditLog(@Query('limit') limit = '50') {
     return this.s.prisma.auditLog.findMany({ orderBy: { at: 'desc' }, take: Math.min(Number(limit) || 50, 200) });
@@ -198,7 +287,15 @@ export class AdminController {
     const user = await this.s.prisma.user.findUnique({ where: { id: userId } });
     if (!user?.walletAddress) throw new BadRequestException({ error: 'NO_WALLET', message: 'The user has not bound a wallet' });
     // Manual admin review: the reference is the review itself. The capped attestor writes only a salted hash on-chain.
-    return this.s.attestations.attest(userId, user.walletAddress, role, level, 'admin-review', 'admin');
+    const a = await this.s.attestations.attest(userId, user.walletAddress, role, level, 'admin-review', 'admin');
+    // The salt is kept encrypted with the record, so the on-chain hash can be verified later (#128).
+    await this.s.prisma.verificationRecord.create({
+      data: {
+        userId, kind: attestationKind(role.toUpperCase()), provider: 'admin', providerRef: 'admin-review', status: 'VERIFIED',
+        result: this.s.pii.seal({ role, level, salt: a.salt, verHash: a.verHash, tx: a.hash }) as never,
+      },
+    });
+    return { hash: a.hash, verHash: a.verHash };
   }
 
   private async setSuspension(admin: AuthedUser, userId: string, reason: string) {

@@ -86,6 +86,8 @@ export interface BuildOverrides {
   store?: ObjectStore;
   kyc?: VerificationProvider;
   tracer?: Tracer;
+  /** Fired for each attestation that trips the spike alert (#130); the API counts it in /metrics. */
+  onAttestorSpike?: () => void;
 }
 
 export function buildServices(env: Env, prisma: PrismaClient, deployments: Deployments, o: BuildOverrides = {}): Services {
@@ -114,7 +116,7 @@ export function buildServices(env: Env, prisma: PrismaClient, deployments: Deplo
     policy: new SponsorshipPolicy(contractNameMap(deployments), new PrismaUsageStore(prisma), undefined, now),
     previewCache: new PoolPreviewCache(env.POOL_PREVIEW_CACHE_TTL_SECONDS * 1000, env.POOL_PREVIEW_CACHE_MAX_ENTRIES),
     fx,
-    attestations: new Attestor(prisma, chain, attestor, env.ATTESTOR_DAILY_CAP, now),
+    attestations: new Attestor(prisma, chain, attestor, env.ATTESTOR_DAILY_CAP, now, undefined, { spikeMultiple: env.ATTESTOR_SPIKE_MULTIPLE, onSpike: o.onAttestorSpike }),
     kyc: o.kyc ?? createVerificationProvider(env.KYC_PROVIDER, env.NODE_ENV),
     pii: new PiiCipher(resolveSecret(env.ENCRYPTION_KEY_ID, env.NODE_ENV)),
   };

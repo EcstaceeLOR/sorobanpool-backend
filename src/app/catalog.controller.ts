@@ -83,7 +83,7 @@ export class CatalogController {
       throw e;
     }
     const tiers = convertTiers((o.tiersNgn as { minUnits: number; priceNgn: string }[]).map((t) => ({ minUnits: t.minUnits, priceNgn: BigInt(t.priceNgn) })), quote.rate);
-    const fx = await this.s.prisma.fxQuote.create({ data: { pair: 'NGN/USD', rate: quote.rate.toString(), sources: quote.sources as unknown as Prisma.InputJsonValue } });
+    const fx = await this.s.prisma.fxQuote.create({ data: { pair: 'NGN/USD', rate: quote.rate.toString(), sources: { quotes: quote.sources, divergence: quote.divergence } as unknown as Prisma.InputJsonValue } });
     const hash = offerHash({
       supplierAddress, title: o.title, brand: o.brand ?? undefined, unitLabel: o.unitLabel, category: o.category, perishable: o.perishable,
       tiers, moq: o.moq, maxUnits: o.maxUnits, maxPerMember: o.maxPerMember, leadTimeHours: o.leadTimeHours, validUntil,

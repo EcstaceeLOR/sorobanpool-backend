@@ -78,6 +78,8 @@ export const A = {
   attest: (attestor: string, user: string, r: Role, verHash: string, level: number) => [addr(attestor), addr(user), role(r), bytes32(verHash), u32(level)],
   suspend: (admin: string, user: string) => [addr(admin), addr(user)],
   unsuspend: (admin: string, user: string) => [addr(admin), addr(user)],
+  /** Assumed layout (#129): the vendored `registry.user_rev` event carries (role, reason). Confirm against the contract. */
+  revoke: (admin: string, user: string, r: Role, reason: string) => [addr(admin), addr(user), role(r), sym(reason)],
   createPool: (organizer: string, terms: PoolTermsInput, hubHash: string, feeBp: number, cluster: string | undefined, fillDeadline: number) =>
     [addr(organizer), poolTerms(terms), bytes32(hubHash), u32(feeBp), optSym(cluster), u64(fillDeadline)],
   commit: (member: string, poolId: bigint, units: number) => [addr(member), u64(poolId), u32(units)],

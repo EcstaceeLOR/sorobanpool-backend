@@ -50,7 +50,11 @@ describe('live FX sources', () => {
 
 describe('fx-refresh job', () => {
   const rows: unknown[] = [];
-  const prisma = { fxQuote: { create: async (a: { data: unknown }) => { rows.push(a.data); return a.data; } } } as never;
+  const audits: { actorId: string; action: string; target: string; data: { divergence: number | null; reason: string } }[] = [];
+  const prisma = {
+    fxQuote: { create: async (a: { data: unknown }) => { rows.push(a.data); return a.data; } },
+    auditLog: { create: async (a: { data: (typeof audits)[number] }) => { audits.push(a.data); return a.data; } },
+  } as never;
   const now = new Date('2026-11-08T12:00:00Z');
 
   it('records the combined rate and its sources', async () => {
@@ -66,6 +70,15 @@ describe('fx-refresh job', () => {
     expect(diverged.divergence).toBeCloseTo(0.111, 3);
     const lonely = await refreshFx(prisma, { quotes: async () => [{ source: 'a', ngnPerUsd: 1350 }] }, now);
     expect(lonely).toMatchObject({ blocked: true, divergence: null });
-    expect(rows).toHaveLength(1); // nothing recorded for either
+    expect(rows).toHaveLength(1); // no rate is recorded for either
+  });
+
+  it('writes each blocked refresh to the audit log, with its divergence and sources (#125)', async () => {
+    audits.length = 0;
+    await refreshFx(prisma, { quotes: async () => [{ source: 'a', ngnPerUsd: 1350 }, { source: 'b', ngnPerUsd: 1500 }] }, now);
+    expect(audits).toHaveLength(1);
+    expect(audits[0]).toMatchObject({ actorId: 'fx-refresh', action: 'fx.blocked', target: 'NGN/USD' });
+    expect(audits[0]!.data.divergence).toBeCloseTo(0.111, 3);
+    expect(audits[0]!.data.reason).toMatch(/diverge by 11\.11%/);
   });
 });

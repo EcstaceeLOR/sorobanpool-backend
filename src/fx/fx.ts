@@ -39,6 +39,25 @@ export function combineQuotes(sources: FxSourceQuote[], at: Date): FxQuote {
 
 export const isQuoteFresh = (q: FxQuote, now: Date): boolean => now.getTime() - q.at.getTime() <= QUOTE_TTL_MS;
 
+/** Relative spread between the highest and lowest valid source rate (the figure `combineQuotes` checks), or null with fewer than two. */
+export function divergenceOf(sources: FxSourceQuote[]): number | null {
+  const rates = sources.map((s) => s.ngnPerUsd).filter((r) => Number.isFinite(r) && r > 0);
+  if (rates.length < 2) return null;
+  const min = Math.min(...rates);
+  return (Math.max(...rates) - min) / min;
+}
+
+/**
+ * Reads the `sources` column of a stored FxQuote (#125). The fx-refresh job stores `{quotes, divergence}`; publishing
+ * stored the bare list before that, so both shapes are accepted and divergence is derived when it was not stored.
+ */
+export function storedSources(json: unknown): { sources: FxSourceQuote[]; divergence: number | null } {
+  if (Array.isArray(json)) return { sources: json as FxSourceQuote[], divergence: divergenceOf(json as FxSourceQuote[]) };
+  const o = (json ?? {}) as { quotes?: FxSourceQuote[]; divergence?: number | null };
+  const sources = o.quotes ?? [];
+  return { sources, divergence: o.divergence ?? divergenceOf(sources) };
+}
+
 /**
  * NGN kobo-free price -> USDC stroops, rounded down (amounts owed to the supplier round down, as on-chain).
  * `rate` is NGN per USD; it is carried as a fixed-point integer so no float touches money.

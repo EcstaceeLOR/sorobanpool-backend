@@ -13,6 +13,9 @@ export const SPONSORED_FUNCTIONS: Record<string, readonly string[]> = {
 /** Refused on the ordinary user path; suspend/unsuspend have a separate admin-only path below. */
 export const NEVER_SPONSORED = ['upgrade', 'set_params', 'set_address', 'attest', 'revoke', 'suspend', 'pause', 'unpause'];
 
+/** Registry functions an ADMIN may have sponsored, one at a time, after the admin path has approved them. */
+export const ADMIN_REGISTRY_FUNCTIONS: readonly string[] = ['suspend', 'unsuspend', 'revoke'];
+
 export const DEFAULT_DAILY_CAP = 50;
 
 export class SponsorshipError extends Error {
@@ -58,10 +61,10 @@ export class SponsorshipPolicy {
     await this.consumeDailyAllowance(userId, name, fn);
   }
 
-  /** Allows only registry suspension operations after the caller has been checked as an ADMIN. */
+  /** Allows only the registry operations an admin may sponsor (suspension, and revocation of a verification, #129). */
   async authorizeAdminAction(userId: string, contractId: string, fn: string): Promise<void> {
     const name = this.contractNames.get(contractId);
-    if (name !== 'registry' || !['suspend', 'unsuspend'].includes(fn)) {
+    if (name !== 'registry' || !ADMIN_REGISTRY_FUNCTIONS.includes(fn)) {
       throw new SponsorshipError('NOT_ALLOWED', `${name ?? contractId}.${fn} is not an allowed admin action`);
     }
     await this.consumeDailyAllowance(userId, name, fn);

@@ -63,6 +63,7 @@ export const ENV_DOCS: Record<keyof typeof envSchema.shape, EnvDoc> = {
   EVIDENCE_DIR: { usedBy: 'all', sensitivity: 'public', description: 'Root directory for the local object store.' },
   FX_STATIC: { usedBy: 'all', sensitivity: 'public', description: 'Comma-separated NGN-per-USD rates for the static FX provider (testnet/dev).' },
   ATTESTOR_DAILY_CAP: { usedBy: 'all', sensitivity: 'public', description: 'registry.attest calls allowed per UTC day; alerts at 80%.' },
+  ATTESTOR_SPIKE_MULTIPLE: { usedBy: 'all', sensitivity: 'public', description: "Spike alert when today's registry.attest count exceeds this multiple of the trailing 7-day daily average (and at least 10)." },
   INDEXER_START_LEDGER: { usedBy: 'indexer', sensitivity: 'public', description: 'First ledger for a fresh indexer; unset starts near the oldest retained ledger (runbook: indexer-backfill).' },
   INDEXER_LAG_ALERT_LEDGERS: { usedBy: 'api,indexer', sensitivity: 'public', description: 'Ledgers behind the RPC tip at which indexer_lag_ledgers is degraded in /health and the alert fires (default 20).' },
   INDEXER_BATCH_LEDGERS: { usedBy: 'indexer', sensitivity: 'public', description: 'Maximum ledgers scanned by one poll; bounds RPC and memory use per tick (default 1000).' },

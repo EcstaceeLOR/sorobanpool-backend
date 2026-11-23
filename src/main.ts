@@ -24,8 +24,10 @@ async function bootstrap(): Promise<void> {
   const env = loadEnv();
   const tracing = await initializeTracing(env.OTEL_EXPORTER_OTLP_ENDPOINT, env.ROLE);
   const prisma = createPrisma(env.DATABASE_URL, undefined, tracing?.tracer);
-  const services = buildServices(env, prisma, loadDeployments(env.DEPLOYMENTS_FILE), { tracer: tracing?.tracer });
   const metrics = new Metrics();
+  const services = buildServices(env, prisma, loadDeployments(env.DEPLOYMENTS_FILE), {
+    tracer: tracing?.tracer, onAttestorSpike: () => metrics.inc('attestor_spike_alerts_total'),
+  });
 
   const runners: Runner[] = [];
   if (env.ROLE === 'indexer' || env.INDEXER_EMBEDDED) {

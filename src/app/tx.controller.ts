@@ -1,9 +1,8 @@
 import { BadRequestException, Body, Controller, HttpCode, Inject, Post } from '@nestjs/common';
 import { z } from 'zod';
-import { inspectUserTx, TxRejected, type InspectedTx } from '../chain/inspect.js';
+import { inspectUserTx } from '../chain/inspect.js';
 import { MAX_FEE_STROOPS } from '../chain/chain.service.js';
-import { SponsorshipError } from '../relayer/allowlist.js';
-import { assertSingleOperation } from '../relayer/fee-bump.js';
+import { ADMIN_REGISTRY_FUNCTIONS } from '../relayer/allowlist.js';
 import { type AuthedUser, CurrentUser, parse } from './http.js';
 import { walletOf } from './prepare.js';
 import { SERVICES, type Services } from './services.js';
@@ -27,18 +26,9 @@ export class TxController {
       throw new BadRequestException({ error: 'IN_PROGRESS', message: 'This request is still being processed' });
     }
     const wallet = await walletOf(this.s, u.id);
-    let seen: InspectedTx;
-    try {
-      seen = inspectUserTx(b.txXdr, { sponsor: this.s.chain.sponsorAddress, passphrase: this.s.env.NETWORK_PASSPHRASE, userWallet: wallet, maxFeeStroops: MAX_FEE_STROOPS });
-      assertSingleOperation(seen.tx); // refuses extra operations before the sponsor pays (#101)
-    } catch (e) {
-      if (e instanceof TxRejected || e instanceof SponsorshipError) {
-        console.warn(`[relayer] rejected transaction from user ${u.id}: ${e.code} (${(e as Error).message})`);
-      }
-      throw e;
-    }
-    const isRegistrySuspension = seen.contractId === this.s.chain.id('registry') && ['suspend', 'unsuspend'].includes(seen.fn);
-    if (isRegistrySuspension) {
+    const seen = inspectUserTx(b.txXdr, { sponsor: this.s.chain.sponsorAddress, passphrase: this.s.env.NETWORK_PASSPHRASE, userWallet: wallet, maxFeeStroops: MAX_FEE_STROOPS });
+    const isAdminRegistryAction = seen.contractId === this.s.chain.id('registry') && ADMIN_REGISTRY_FUNCTIONS.includes(seen.fn);
+    if (isAdminRegistryAction) {
       const admin = await this.s.prisma.userRole.findUnique({ where: { userId_role: { userId: u.id, role: 'ADMIN' } } });
       if (admin) await this.s.policy.authorizeAdminAction(u.id, seen.contractId, seen.fn);
       else await this.s.policy.authorize(u.id, seen.contractId, seen.fn);

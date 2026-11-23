@@ -59,6 +59,7 @@ variable must be set for every role even if that role does not read it.
 | `EVIDENCE_DIR` | `.evidence` | no | all | Root directory for the local object store. |
 | `FX_STATIC` | `1500,1505` | no | all | Comma-separated NGN-per-USD rates for the static FX provider (testnet/dev). |
 | `ATTESTOR_DAILY_CAP` | `500` | no | all | registry.attest calls allowed per UTC day; alerts at 80%. |
+| `ATTESTOR_SPIKE_MULTIPLE` | `3` | no | all | Spike alert when today's registry.attest count exceeds this multiple of the trailing 7-day daily average (and at least 10). |
 | `INDEXER_START_LEDGER` | optional | no | indexer | First ledger for a fresh indexer; unset starts near the oldest retained ledger (runbook: indexer-backfill). |
 | `INDEXER_LAG_ALERT_LEDGERS` | `20` | no | api,indexer | Ledgers behind the RPC tip at which indexer_lag_ledgers is degraded in /health and the alert fires (default 20). |
 | `INDEXER_BATCH_LEDGERS` | `1000` | no | indexer | Maximum ledgers scanned by one poll; bounds RPC and memory use per tick (default 1000). |
